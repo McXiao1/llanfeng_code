@@ -31,7 +31,10 @@ import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 
-import websockets
+# websockets is imported lazily inside inject_scripts() so that the module
+# loads cleanly even when the package is absent (e.g. a stale build without
+# websockets bundled).  The button will always be visible; only the actual
+# injection step fails if websockets is missing at runtime.
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -556,6 +559,8 @@ async def get_cdp_ws_url(
 async def inject_scripts(ws_url: str, scripts: Sequence[str]) -> None:
     """Inject scripts via CDP: persist with addScriptToEvaluateOnNewDocument
     and execute immediately with Runtime.evaluate."""
+    import websockets  # deferred — not needed at module-import time
+
     async with websockets.connect(ws_url) as ws:
         mid = 1
         for script in scripts:

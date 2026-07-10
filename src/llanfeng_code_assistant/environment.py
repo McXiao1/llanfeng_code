@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -133,6 +134,7 @@ class ToolDetector:
                 check=False,
                 text=True,
                 timeout=self._timeout_seconds,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return ToolStatus(name=name, path=path, version=None, error=str(exc))

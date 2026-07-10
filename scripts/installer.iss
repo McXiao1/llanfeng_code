@@ -39,7 +39,8 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："; Flags: unchecked
+Name: "desktopicon"; Description: "创建桌面快捷方式（主程序）"; GroupDescription: "附加快捷方式："; Flags: unchecked
+Name: "codexplugin"; Description: "创建桌面 Codex-Plugin 快捷方式（双击直接注入启动 ChatGPT）"; GroupDescription: "附加快捷方式："; Flags: checked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -47,6 +48,7 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\Codex-Plugin"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--inject"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"; Comment: "直接启动 ChatGPT Desktop 并注入插件市场解锁 + 模型白名单"; Tasks: codexplugin
 
 [Registry]
 Root: HKCU; Subkey: "Software\Classes\llanfeng-code"; ValueType: string; ValueName: ""; ValueData: "URL:Llanfeng Code Assistant"; Flags: uninsdeletekey

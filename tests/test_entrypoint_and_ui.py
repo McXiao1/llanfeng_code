@@ -894,7 +894,7 @@ def test_protocol_document_button_opens_scrollable_complete_document_dialog() ->
     assert markdown.selectable is True
     assert markdown.auto_follow_links is True
     assert markdown.auto_follow_links_target == ft.UrlTarget.BLANK
-    assert "https://lanfengai.cn" in markdown.value
+    assert "https://github.com/McXiao1/llanfeng_code" in markdown.value
     assert "llanfeng-code://v1/import?" in markdown.value
     assert "llanfeng-code://v1/import-list?payload=" in markdown.value
     assert "HTML / JavaScript 示例" in markdown.value

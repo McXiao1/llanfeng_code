@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llanfeng-code-assistant"
-version = "1.0.0"
+version = "1.1.0"
 description = "Windows desktop helper for Codex and Claude configuration."
 requires-python = ">=3.12"
 dependencies = [
@@ -29,6 +29,10 @@ llanfeng-code-assistant = "llanfeng_code_assistant.__main__:main"
 
 [tool.flet.app]
 module = "main.py"
+# Explicitly list packages that serious_python might miss via static analysis.
+# websockets uses lazy imports internally and must be named here so Flet's
+# build tool bundles it even when the top-level import is deferred.
+packages = ["websockets"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

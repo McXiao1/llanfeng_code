@@ -166,6 +166,7 @@ class InstallerService:
             capture_output=True,
             text=True,
             check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
 
     def install_cli(self, target: InstallTarget) -> subprocess.CompletedProcess[str]:
@@ -180,6 +181,7 @@ class InstallerService:
             capture_output=True,
             text=True,
             check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
 
     def launch_and_close(self, command: str, delay_seconds: float = 2.0) -> None:

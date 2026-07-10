@@ -17,6 +17,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="llanfeng-code-assistant")
     parser.add_argument("--import-url", dest="import_url")
     parser.add_argument("--version", action="store_true")
+    parser.add_argument(
+        "--inject",
+        action="store_true",
+        help="Skip the GUI and directly launch ChatGPT Desktop with CDP injection.",
+    )
     return parser.parse_args(argv)
 
 
@@ -31,6 +36,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.version:
         print(__version__)
         return 0
+    if args.inject:
+        from .inject_launch import main as inject_main
+        return inject_main()
     with SingleInstance() as instance:
         if not instance.acquired:
             return 0
