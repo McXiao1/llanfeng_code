@@ -7,7 +7,7 @@ PROTOCOL_DOCUMENT_MARKDOWN = r"""
 - 岚风科技 (岚风游戏) 出品
 - 技术咨询: **QQ:2235359588**
 - QQ群: **248137797**
-- 开源地址: [点我跳转](https://lanfengai.cn)
+- 开源地址: [点我跳转](https://github.com/McXiao1/llanfeng_code)
 
 # Web 端对接协议
 
