@@ -16,7 +16,6 @@ ENV/
 
 # ── Build output ─────────────────────────────────────────────────────────────
 build/
-*.exe
 
 # ── Test / lint cache ────────────────────────────────────────────────────────
 .pytest_cache/
@@ -31,14 +30,6 @@ htmlcov/
 *.swo
 *.DS_Store
 Thumbs.db
-
-# ── Flet / Flutter artefacts ─────────────────────────────────────────────────
-# Generated Flutter runner; only the source files under windows/ are tracked.
-build/flutter/
-docs/
-.claude/
-scripts/
-tests/
 
 # ── Local secrets ────────────────────────────────────────────────────────────
 .env
