@@ -6,11 +6,6 @@
 
 ## [1.1.0] - 2026-07-10
 
-### 新增
-- **注入启动按钮**：移至顶栏最右侧，与「新增」同层；点击后自动写入配置并以 CDP 增强模式启动 ChatGPT Desktop
-- **推理强度新增 xhigh / ultra 两档**：模型选择器现支持完整 5 档 — `low / medium / high / xhigh / ultra`
-- **微软商店路径自动发现**：`find_chatgpt_exe()` 通过 `Get-AppxPackage -Name "OpenAI.Codex"` 动态查找安装位置（`app\ChatGPT.exe`），不再依赖固定路径；npm 安装版本保留为兜底
-
 ### 修复
 - **CDP 注入崩溃**（三处关键 Bug）：
   - `Array.prototype.filter` 补丁在检测阶段调用了原始回调 `!cb(p)`，导致 React 渲染期间抛出异常、App 白屏；改为仅检查回调源码文本和数组元素结构，绝不执行回调

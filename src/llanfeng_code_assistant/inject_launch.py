@@ -108,3 +108,77 @@ def main() -> int:
     @returns: Process exit code.
     """
     return asyncio.run(_run())
+
+
+def run_with_loading_ui() -> int:
+    """Show a Flet loading window while injection runs, then close it.
+
+    Replaces the blank Flutter startup window with a minimal status screen
+    that displays "正在启动 ChatGPT..." during the injection flow.
+
+    The heavy work (subprocess, file I/O, CDP websocket) runs in a dedicated
+    thread via ``asyncio.to_thread`` so the Flet rendering loop is never
+    blocked — the progress ring keeps animating throughout.
+
+    @returns: Process exit code (0 on success, 1 on error).
+    """
+    import flet as ft
+
+    _exit_code: list[int] = [0]
+
+    async def _app(page: ft.Page) -> None:
+        # ── Window geometry ───────────────────────────────────────────────────
+        page.title = "Codex Plugin"
+        page.window.width = 400
+        page.window.height = 110
+        page.window.resizable = False
+        page.window.maximizable = False
+        page.window.minimizable = False
+        page.window.always_on_top = True
+        page.window.center()
+        page.bgcolor = ft.Colors.WHITE
+        page.padding = 28
+        page.theme_mode = ft.ThemeMode.LIGHT
+
+        # ── Status UI ─────────────────────────────────────────────────────────
+        status = ft.Text(
+            "正在启动 ChatGPT...",
+            size=14,
+            color=ft.Colors.GREY_800,
+            weight=ft.FontWeight.W_500,
+        )
+
+        page.add(
+            ft.Row(
+                [
+                    ft.ProgressRing(
+                        width=18,
+                        height=18,
+                        stroke_width=2,
+                        color=ft.Colors.BLUE_600,
+                    ),
+                    ft.Container(width=14),
+                    status,
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+        )
+        # Force the UI to render before starting injection
+        page.update()
+
+        # ── Injection in a background thread ─────────────────────────────────
+        # asyncio.to_thread runs _run in a new OS thread with its own event
+        # loop, so blocking calls (subprocess.run, file I/O, MessageBoxW) never
+        # stall Flet's rendering loop and the progress ring keeps spinning.
+        async def _do() -> None:
+            code = await asyncio.to_thread(lambda: asyncio.run(_run()))
+            await asyncio.sleep(0.4)
+            # page.window.close() is unreliable in packaged Flet builds.
+            # os._exit() terminates the process (and the Flutter window) directly.
+            import os
+            os._exit(code)
+
+        page.run_task(_do)
+
+    ft.app(target=_app)
+    return _exit_code[0]
