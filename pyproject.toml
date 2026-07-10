@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=70.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llanfeng-code-assistant"
+version = "1.0.0"
+description = "Windows desktop helper for Codex and Claude configuration."
+requires-python = ">=3.12"
+dependencies = [
+    "certifi==2026.2.25",
+    "flet==0.85.3",
+    "httpx==0.28.1",
+    "tomlkit==0.15.0",
+    "pydantic==2.13.4",
+    "keyring==25.7.0",
+    "websockets==16.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.15.20",
+]
+
+[project.scripts]
+llanfeng-code-assistant = "llanfeng_code_assistant.__main__:main"
+
+[tool.flet.app]
+module = "main.py"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+exclude = ["build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
