@@ -151,17 +151,15 @@ class CodexModelCatalogEditor:
             ),
             ft.TextField(
                 label="上下文",
-                value="" if context_window is None else str(context_window),
-                hint_text="1000000",
-                keyboard_type=ft.KeyboardType.NUMBER,
-                input_filter=ft.NumbersOnlyInputFilter(),
+                value=str(context_window) if context_window is not None else str(DEFAULT_CODEX_CONTEXT_WINDOW),
+                read_only=True,
                 dense=True,
                 width=130,
+                tooltip="由模型官方定义，不可手动修改",
                 data={
                     "catalog_model_id": model_id,
                     "catalog_field": "context_window",
                 },
-                on_change=self._handle_field_change,
             ),
             ft.IconButton(
                 icon=ft.Icons.DELETE_OUTLINE,

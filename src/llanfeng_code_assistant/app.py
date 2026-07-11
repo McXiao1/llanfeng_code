@@ -207,6 +207,12 @@ class AssistantApp:
                     on_click=lambda _: self.page.run_task(self._unlock_statsig_models),
                 ),
                 ft.Button(
+                    content="恢复配置",
+                    icon=ft.Icons.SETTINGS_BACKUP_RESTORE,
+                    tooltip="删除 Codex 所有配置文件，恢复至初始状态",
+                    on_click=lambda _: self._confirm_reset_codex_config(),
+                ),
+                ft.Button(
                     content="注入启动",
                     icon=ft.Icons.ROCKET_LAUNCH,
                     tooltip="以 CDP 增强模式启动 ChatGPT Desktop 并注入模型白名单",
@@ -939,6 +945,74 @@ class AssistantApp:
             )
         else:
             self._show_message(f"✅ {result['message']}{backup_info}")
+
+    def _confirm_reset_codex_config(self) -> None:
+        """Show a confirmation dialog before resetting all Codex configuration files.
+
+        Presents the list of files that will be deleted so the user can make
+        an informed decision before proceeding.
+        """
+
+        config_mgr = self.services.codex_config
+        targets = [config_mgr.config_path, config_mgr.auth_path, config_mgr.model_catalog_path]
+        existing = [p for p in targets if p.exists()]
+
+        if not existing:
+            self._show_message("Codex 配置文件不存在，无需恢复")
+            return
+
+        file_list = "\n".join(f"• {p.name}" for p in existing)
+
+        def _on_confirm(_: ft.ControlEvent) -> None:
+            self._dialog_close(dialog)
+            self._reset_codex_config()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("恢复配置"),
+            content=ft.Text(
+                f"以下 Codex 配置文件将被删除，Codex 将恢复至初始状态：\n\n"
+                f"{file_list}\n\n"
+                "此操作不可撤销，是否继续？"
+            ),
+            actions=[
+                ft.Button(content="取消", on_click=lambda _: self._dialog_close(dialog)),
+                ft.Button(
+                    content="确认恢复",
+                    icon=ft.Icons.SETTINGS_BACKUP_RESTORE,
+                    on_click=_on_confirm,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._show_dialog(dialog)
+
+    def _reset_codex_config(self) -> None:
+        """Delete all Codex configuration files to restore the initial state.
+
+        Removes ``config.toml``, ``auth.json``, and ``models.json`` from the
+        Codex config directory.  Also clears the active profile selection so
+        the UI reflects the reset state.
+        """
+
+        try:
+            removed = self.services.codex_config.reset()
+        except Exception as exc:
+            self._show_message(f"恢复失败: {exc}")
+            return
+
+        # Clear the active profile marker so the profile list reflects the reset
+        try:
+            self.services.repository.clear_active_profile("codex")
+        except Exception:
+            pass  # Best-effort; don't fail the reset over this
+
+        self._refresh_profiles()
+        if removed:
+            names = "、".join(p.name for p in removed)
+            self._show_message(f"已删除：{names}\nCodex 配置已恢复至初始状态")
+        else:
+            self._show_message("配置文件不存在，无需恢复")
 
     def _open_profile_terminal(self, profile: ProviderProfile) -> None:
         try:

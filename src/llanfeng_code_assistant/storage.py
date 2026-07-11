@@ -297,6 +297,19 @@ class ProfileRepository:
                 (profile.target, profile.id),
             )
 
+    def clear_active_profile(self, target: TargetName) -> None:
+        """Remove the active-profile marker for a target.
+
+        After a config reset the stored files are gone, so the active marker
+        is no longer meaningful.  Clearing it makes the UI reflect the
+        unactivated state correctly.
+
+        @param target: Target whose active marker should be removed.
+        """
+
+        with self._connection() as connection:
+            connection.execute("DELETE FROM active_profiles WHERE target = ?", (target,))
+
     def get_active_profile_id(self, target: TargetName) -> str | None:
         """Return the active profile id for a target.
 

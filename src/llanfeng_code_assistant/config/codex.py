@@ -198,3 +198,20 @@ class CodexConfigManager:
             auth_write=auth_write,
             auth_written=auth_write is not None,
         )
+
+    def reset(self) -> list[Path]:
+        """Remove all Codex configuration files written by this application.
+
+        Deletes ``config.toml``, ``auth.json``, and ``models.json`` if they
+        exist.  The config directory itself is left intact.
+
+        @returns: List of paths that were actually removed.
+        """
+
+        targets = [self.config_path, self.auth_path, self.model_catalog_path]
+        removed: list[Path] = []
+        for path in targets:
+            if path.exists():
+                path.unlink()
+                removed.append(path)
+        return removed
