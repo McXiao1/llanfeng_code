@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import webbrowser
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -29,7 +29,16 @@ from .paths import claude_settings_path, codex_config_dir, database_path
 from .protocol_document import PROTOCOL_DOCUMENT_MARKDOWN
 from .secrets import KeyringSecretStore
 from .storage import ProfileRepository
-from .updater import ReleaseInfo, UpdateChecker
+from .update_banner import UpdateBanner
+from .updater import (
+    ReleaseInfo,
+    UpdateChecker,
+    UpdateDownloadError,
+    UpdateInstallationError,
+    UpdateInstallerService,
+)
+
+logger = logging.getLogger(__name__)
 
 TargetTab = Literal["codex", "claude"]
 
@@ -81,9 +90,16 @@ def format_tool_status(status: ToolStatus, minimum: str | None = None) -> str:
 class AssistantApp:
     """Flet desktop application controller."""
 
-    def __init__(self, page: ft.Page, services: AppServices, import_url: str | None = None) -> None:
+    def __init__(
+        self,
+        page: ft.Page,
+        services: AppServices,
+        import_url: str | None = None,
+        update_installer: UpdateInstallerService | None = None,
+    ) -> None:
         self.page = page
         self.services = services
+        self._update_installer = update_installer or UpdateInstallerService()
         self.import_requests = self._parse_import_url(import_url)
         self.current_target: TargetTab = "codex"
         self.status = self.services.detector.detect_all()
@@ -99,13 +115,13 @@ class AssistantApp:
             selected_index=0,
             on_change=self._on_tab_change,
         )
-        # Update banner — hidden until a newer release is detected
-        self._update_banner = ft.Container(
-            visible=False,
-            bgcolor=ft.Colors.ORANGE_50,
-            border_radius=8,
-            padding=ft.Padding.symmetric(horizontal=12, vertical=8),
-            border=ft.Border.all(1, ft.Colors.ORANGE_200),
+        self._available_update: ReleaseInfo | None = None
+        self._downloaded_update_path: Path | None = None
+        self._update_in_progress = False
+        self._update_banner = UpdateBanner(
+            self.page,
+            on_action=self._on_update_action,
+            on_dismiss=self._dismiss_update_banner,
         )
 
     def _parse_import_url(self, import_url: str | None) -> list[ImportRequest]:
@@ -130,7 +146,7 @@ class AssistantApp:
             ft.Column(
                 [
                     self._build_header(),
-                    self._update_banner,
+                    self._update_banner.control,
                     ft.Divider(height=1),
                     self.tabs,
                     self.profile_column,
@@ -218,40 +234,87 @@ class AssistantApp:
 
         @param info: Release metadata returned by :class:`UpdateChecker`.
         """
+        self._available_update = info
+        self._downloaded_update_path = None
+        self._update_in_progress = False
+        self._update_banner.show_available(info)
 
-        def _open_download(_: ft.ControlEvent) -> None:
-            webbrowser.open(info.download_url)
+    def _on_update_action(self, _: ft.ControlEvent) -> None:
+        if self._update_in_progress:
+            return
+        if self._downloaded_update_path is not None:
+            self._start_downloaded_installer()
+            return
+        if self._available_update is None:
+            return
 
-        self._update_banner.content = ft.Row(
-            [
-                ft.Icon(ft.Icons.NEW_RELEASES, color=ft.Colors.ORANGE_700, size=18),
-                ft.Text(
-                    f"发现新版本 V{info.version}，点击下载安装",
-                    size=13,
-                    color=ft.Colors.ORANGE_900,
-                    expand=True,
-                ),
-                ft.Button(
-                    content="下载安装",
-                    icon=ft.Icons.DOWNLOAD,
-                    on_click=_open_download,
-                ),
-                ft.IconButton(
-                    icon=ft.Icons.CLOSE,
-                    tooltip="忽略此次更新",
-                    on_click=lambda _: self._dismiss_update_banner(),
-                ),
-            ],
-            spacing=8,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        )
-        self._update_banner.visible = True
-        self.page.update()
+        self._set_update_downloading(self._available_update)
+        self.page.run_task(self._download_and_install_update, self._available_update)
+
+    def _set_update_downloading(self, info: ReleaseInfo) -> None:
+        self._update_in_progress = True
+        self._update_banner.show_downloading(info)
+
+    async def _download_and_install_update(self, info: ReleaseInfo) -> None:
+        """Download a release in-app and start its installer when complete.
+
+        @param info: Release metadata selected by the update checker.
+        """
+        if not self._update_in_progress:
+            self._set_update_downloading(info)
+
+        try:
+            installer_path = await self._update_installer.download(
+                info,
+                self._update_banner.show_progress,
+            )
+        except asyncio.CancelledError:
+            self._update_in_progress = False
+            raise
+        except UpdateDownloadError as exc:
+            self._show_update_download_error(str(exc))
+            return
+        except Exception:
+            logger.exception("Unexpected in-app update download failure")
+            self._show_update_download_error("更新失败: 请稍后重试")
+            return
+
+        self._downloaded_update_path = installer_path
+        self._update_in_progress = False
+        self._update_banner.show_download_complete(info)
+        self._start_downloaded_installer()
+
+    def _show_update_download_error(self, message: str) -> None:
+        self._update_in_progress = False
+        self._downloaded_update_path = None
+        self._update_banner.show_download_error(message)
+
+    def _start_downloaded_installer(self) -> None:
+        installer_path = self._downloaded_update_path
+        if installer_path is None:
+            return
+
+        try:
+            self._update_installer.start_installer(installer_path)
+        except UpdateInstallationError as exc:
+            message = str(exc)
+        except Exception:
+            logger.exception("Unexpected update installer launch failure")
+            message = "无法启动安装程序: 请稍后重试"
+        else:
+            self._update_banner.show_installer_started()
+            return
+
+        installer_exists = installer_path.is_file()
+        if not installer_exists:
+            self._downloaded_update_path = None
+        self._update_banner.show_installer_error(message, installer_exists)
 
     def _dismiss_update_banner(self) -> None:
         """Hide the update banner when the user dismisses it."""
-        self._update_banner.visible = False
-        self.page.update()
+        if self._update_in_progress:
+            return
+        self._update_banner.hide()
 
     def _status_chip(self, label: str, ok: bool) -> ft.Control:
         color = ft.Colors.GREEN_700 if ok else ft.Colors.RED_700

@@ -15,6 +15,7 @@ from llanfeng_code_assistant.models import (
     ProviderDraft,
     ProviderProfile,
 )
+from llanfeng_code_assistant.updater import DownloadProgress, ReleaseInfo
 
 
 class _FakeDetector:
@@ -139,6 +140,7 @@ class _FakePage(SimpleNamespace):
         super().__init__(window=SimpleNamespace())
         self.controls: list[object] = []
         self.opened_dialogs: list[object] = []
+        self.scheduled_tasks: list[tuple[object, tuple[object, ...]]] = []
         self.update_count = 0
 
     def add(self, *controls: object) -> None:
@@ -159,7 +161,8 @@ class _FakePage(SimpleNamespace):
         self.update_count += 1
 
     def run_task(self, coro: object, *args: object) -> None:
-        """Stub for async task scheduling used by CDP launch buttons."""
+        """Record async task scheduling without starting an event loop."""
+        self.scheduled_tasks.append((coro, args))
 
 
 def _fake_services(
@@ -261,6 +264,112 @@ def test_assistant_app_builds_with_current_flet_button_api() -> None:
 
     assert page.controls
     assert page.update_count >= 2
+
+
+def test_update_banner_action_schedules_in_app_download() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+
+    page = _FakePage()
+    app = AssistantApp(page, _fake_services())
+    release = ReleaseInfo(
+        version="1.2.0",
+        download_url="https://github.com/example/setup.exe",
+        changelog="",
+        filename="Setup.exe",
+        download_size=1024,
+    )
+
+    app._show_update_banner(release)
+    app._update_banner.action_button.on_click(SimpleNamespace())
+
+    assert app._update_in_progress is True
+    assert app._update_banner.progress_row.visible is True
+    assert app._update_banner.action_button.disabled is True
+    assert page.scheduled_tasks == [(app._download_and_install_update, (release,))]
+
+
+async def test_update_download_progress_starts_installer_after_completion() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+
+    class FakeUpdateInstaller:
+        def __init__(self) -> None:
+            self.downloaded: list[ReleaseInfo] = []
+            self.started: list[Path] = []
+            self.installer_path = Path("C:/updates/Setup.exe")
+
+        async def download(
+            self,
+            release: ReleaseInfo,
+            on_progress: Callable[[DownloadProgress], None] | None = None,
+        ) -> Path:
+            self.downloaded.append(release)
+            if on_progress is not None:
+                on_progress(DownloadProgress(512, 1024))
+                on_progress(DownloadProgress(1024, 1024))
+            return self.installer_path
+
+        def start_installer(self, path: Path) -> None:
+            self.started.append(path)
+
+    page = _FakePage()
+    update_installer = FakeUpdateInstaller()
+    app = AssistantApp(page, _fake_services(), update_installer=update_installer)
+    release = ReleaseInfo(
+        version="1.2.0",
+        download_url="https://github.com/example/setup.exe",
+        changelog="",
+        filename="Setup.exe",
+        download_size=1024,
+    )
+    app._show_update_banner(release)
+
+    await app._download_and_install_update(release)
+
+    assert update_installer.downloaded == [release]
+    assert update_installer.started == [update_installer.installer_path]
+    assert app._update_banner.progress.value == 1
+    assert app._update_banner.progress_text.value == "100%"
+    assert app._update_banner.status_text.value == "安装程序已启动"
+    assert app._update_banner.action_button.content == "重新打开安装程序"
+
+
+async def test_update_download_failure_enables_retry_without_starting_installer() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+    from llanfeng_code_assistant.updater import UpdateDownloadError
+
+    class FailingUpdateInstaller:
+        async def download(
+            self,
+            _release: ReleaseInfo,
+            _on_progress: Callable[[DownloadProgress], None] | None = None,
+        ) -> Path:
+            raise UpdateDownloadError("网络连接失败")
+
+        def start_installer(self, _path: Path) -> None:
+            raise AssertionError("failed downloads must not start the installer")
+
+    page = _FakePage()
+    app = AssistantApp(
+        page,
+        _fake_services(),
+        update_installer=FailingUpdateInstaller(),
+    )
+    release = ReleaseInfo(
+        version="1.2.0",
+        download_url="https://github.com/example/setup.exe",
+        changelog="",
+        filename="Setup.exe",
+    )
+    app._show_update_banner(release)
+
+    await app._download_and_install_update(release)
+
+    assert app._update_in_progress is False
+    assert app._downloaded_update_path is None
+    assert app._update_banner.status_text.value == "更新下载失败"
+    assert app._update_banner.detail_text.value == "网络连接失败"
+    assert app._update_banner.action_button.content == "重试下载"
+    assert app._update_banner.action_button.disabled is False
 
 
 def test_assistant_app_opens_profile_dialog_with_current_flet_api() -> None:
