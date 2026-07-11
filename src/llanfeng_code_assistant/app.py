@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import webbrowser
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import flet as ft
 from pydantic import ValidationError
 
 from . import __version__
-from .codex_model_catalog_editor import CodexModelCatalogEditor
 from .codex_desktop_launcher import build_injection_scripts, find_codex_exe, launch_and_inject
+from .codex_model_catalog_editor import CodexModelCatalogEditor
 from .config.claude import ClaudeConfigManager
 from .config.codex import CodexConfigManager
 from .constants import APP_DISPLAY_NAME, GITHUB_RELEASES_LATEST_URL, MIN_NODE_VERSION
@@ -183,10 +185,17 @@ class AssistantApp:
                     on_click=lambda _: self._open_profile_dialog(None),
                 ),
                 ft.Button(
+                    content="解锁模型",
+                    icon=ft.Icons.LOCK_OPEN,
+                    tooltip="永久解锁自定义模型（修改 Codex 配置缓存，一次修改永久生效）",
+                    on_click=lambda _: self.page.run_task(self._unlock_statsig_models),
+                ),
+                ft.Button(
                     content="注入启动",
                     icon=ft.Icons.ROCKET_LAUNCH,
-                    tooltip="写入配置并以 CDP 增强模式启动 ChatGPT Desktop（插件市场解锁 + 模型白名单注入）",
+                    tooltip="以 CDP 增强模式启动 ChatGPT Desktop 并注入模型白名单",
                     on_click=lambda _: self.page.run_task(self._launch_active_codex_injected),
+                    visible=False,
                 ),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -686,29 +695,28 @@ class AssistantApp:
         await self._launch_codex_injected(profile)
 
     async def _launch_codex_injected(self, profile: ProviderProfile) -> None:
-        """Write config then launch Codex Desktop with CDP script injection.
+        """Launch Codex Desktop with CDP script injection.
 
-        Applies the profile (writes ``config.toml`` and ``models.json``),
-        locates the Codex native executable, starts it with the WebView2
+        Locates the Codex native executable, starts it with the WebView2
         remote-debugging port enabled, and injects the enhancement scripts
         (plugin marketplace unlock + model reasoning capabilities).
+
+        Does NOT write config.toml — configuration should only be written
+        when user clicks the "Enable" button, not on every injection launch.
+        Writing config here would overwrite user's in-app customizations
+        (model selection, plugin installations).
 
         Falls back gracefully: if CDP connection times out, Codex is still
         running — only the JS enhancements are skipped.
 
-        @param profile: Codex provider profile to apply before launch.
+        @param profile: Codex provider profile to use for injection scripts.
         """
-        api_key = self.services.repository.get_secret(profile)
-        if not api_key:
-            self._show_message("Key 不存在")
-            return
-
-        # Step 1 — write config.toml and models.json
-        try:
-            self.services.codex_config.apply_profile(profile, api_key)
-            self.services.repository.set_active_profile(profile)
-        except Exception as exc:
-            self._show_message(f"配置写入失败: {exc}")
+        # Step 1 — Verify config exists (user should have clicked "Enable" first)
+        if not self.services.codex_config.config_path.exists():
+            self._show_message(
+                "请先点击「启用」按钮写入配置，\n"
+                "然后再使用注入启动功能。"
+            )
             return
 
         # Step 2 — locate ChatGPT.exe (Store) or codex.exe (npm fallback)
@@ -735,6 +743,139 @@ class AssistantApp:
         except Exception as exc:
             self._refresh_profiles()
             self._show_message(f"Codex 已启动，注入失败: {exc}")
+
+    async def _unlock_statsig_models(self) -> None:
+        """Permanently unlock custom models by modifying Codex LevelDB cache.
+
+        This provides a one-time modification that persists across restarts,
+        eliminating the need for CDP injection on every launch.  When Codex is
+        running the database is locked, so the user is prompted to force-quit
+        it before proceeding.
+        """
+        from .codex_statsig_unlocker import find_codex_leveldb_path, is_codex_running
+
+        # Step 1 — Require an active profile with custom models
+        active_id = self.services.repository.get_active_profile_id("codex")
+        if not active_id:
+            self._show_message("请先启用一个 Codex 配置")
+            return
+
+        profiles = self.services.repository.list_profiles("codex")
+        profile = next((p for p in profiles if p.id == active_id), None)
+        if profile is None:
+            self._show_message("未找到已启用的 Codex 配置")
+            return
+
+        if not profile.codex_models:
+            self._show_message("当前配置中没有自定义模型，无需解锁")
+            return
+
+        # Step 2 — Find the LevelDB path
+        db_path = find_codex_leveldb_path()
+        if db_path is None:
+            self._show_message(
+                "未找到 Codex 配置数据库\n"
+                "请确认已安装 ChatGPT Desktop 并至少启动过一次"
+            )
+            return
+
+        # Step 3 — When Codex is running the DB is locked; ask to force-quit.
+        if is_codex_running():
+            self._confirm_force_quit_and_unlock(profile, db_path)
+            return
+
+        # Step 4 — Not running; unlock immediately.
+        await self._perform_unlock(profile, db_path, force_quit=False)
+
+    def _confirm_force_quit_and_unlock(self, profile: ProviderProfile, db_path: Path) -> None:
+        """Prompt to force-quit the running Codex before unlocking models.
+
+        The Codex LevelDB is locked while the app runs, so modification can
+        only proceed after the process exits.  Confirming force-quits Codex
+        and continues with the unlock; cancelling aborts.
+
+        @param profile: Active Codex profile whose models will be unlocked.
+        @param db_path: Resolved Codex LevelDB directory.
+        """
+
+        def _on_confirm(_: ft.ControlEvent) -> None:
+            self._dialog_close(dialog)
+            self.page.run_task(self._perform_unlock, profile, db_path, True)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Codex 正在运行"),
+            content=ft.Text(
+                "解锁模型需要修改 Codex 配置数据库，而该数据库在 Codex 运行时被锁定。\n\n"
+                "是否强制退出 Codex 并继续解锁？"
+            ),
+            actions=[
+                ft.Button(content="取消", on_click=lambda _: self._dialog_close(dialog)),
+                ft.Button(
+                    content="强制退出并解锁",
+                    icon=ft.Icons.POWER_SETTINGS_NEW,
+                    on_click=_on_confirm,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._show_dialog(dialog)
+
+    async def _perform_unlock(
+        self, profile: ProviderProfile, db_path: Path, force_quit: bool
+    ) -> None:
+        """Force-quit Codex if requested, then unlock models in the LevelDB.
+
+        Blocking work (process kill, file I/O) runs in a worker thread so the
+        Flet UI stays responsive.
+
+        @param profile: Active Codex profile whose models will be unlocked.
+        @param db_path: Resolved Codex LevelDB directory.
+        @param force_quit: Whether to force-quit Codex before modifying the DB.
+        """
+        from .codex_statsig_unlocker import force_kill_codex, unlock_statsig_models
+
+        if force_quit:
+            self._show_message("正在强制退出 Codex，请稍候...")
+            killed = await asyncio.to_thread(force_kill_codex)
+            if not killed:
+                self._show_message("无法退出 Codex，请手动关闭后重试")
+                return
+
+        model_names = [m.model_id for m in profile.codex_models]
+        default_model = profile.model or (model_names[0] if model_names else None)
+        self._show_message(f"正在解锁 {len(model_names)} 个模型，请稍候...")
+
+        try:
+            result = await asyncio.to_thread(
+                unlock_statsig_models,
+                db_path=db_path,
+                models_to_add=model_names,
+                default_model=default_model,
+                create_backup=True,
+            )
+        except ImportError:
+            self._show_message("缺少依赖库 plyvel\n请运行：pip install plyvel")
+            return
+        except Exception as exc:
+            self._show_message(f"解锁失败：{exc}")
+            return
+
+        if not result["success"]:
+            self._show_message(f"❌ 解锁失败：{result['message']}")
+            return
+
+        backup = result["backup_path"]
+        backup_info = f"\n备份已保存至：{backup.name}" if backup else ""
+        if result["models_added"]:
+            self._show_message(
+                f"✅ {result['message']}\n"
+                f"已解锁模型：{', '.join(result['models_added'])}"
+                f"{backup_info}\n\n"
+                f"请重新启动 Codex Desktop 查看效果"
+            )
+        else:
+            self._show_message(f"✅ {result['message']}{backup_info}")
 
     def _open_profile_terminal(self, profile: ProviderProfile) -> None:
         try:

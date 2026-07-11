@@ -20,6 +20,13 @@ Key mechanisms:
    detection (never calls the original callback during detection) to bypass
    build-flavor and marketplace-hidden filters; also patches
    ``window.electronBridge.sendMessageFromView``.
+5. **Fast startup optimization** — applies timeout to Statsig requests to
+   prevent long initialization delays on first launch.
+
+Important: All patches work via runtime memory injection only. Configuration
+files (config.toml, models.json) are only written when missing or when the
+user explicitly changes settings in the main app. This preserves user's
+in-app customizations (model selection, plugin installations) across launches.
 """
 from __future__ import annotations
 
@@ -41,8 +48,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 CDP_DEFAULT_PORT: int = 9222
-CDP_WAIT_TIMEOUT: float = 30.0
-CDP_WAIT_INTERVAL: float = 0.5
+CDP_WAIT_TIMEOUT: float = 15.0  # Reduced from 30s to 15s for faster startup
+CDP_WAIT_INTERVAL: float = 0.3  # Reduced from 0.5s to 0.3s for more responsive polling
 
 STORE_PACKAGE_NAME: str = "OpenAI.Codex"
 STORE_EXE_RELPATH: str = r"app\ChatGPT.exe"
@@ -92,7 +99,7 @@ def _wrap(tag: str, body: str) -> str:
 # Script 1 — Statsig fast-startup timeout
 # ---------------------------------------------------------------------------
 FAST_STARTUP_SCRIPT: str = _wrap("fast_startup", r"""
-  var TIMEOUT_MS = 800;
+  var TIMEOUT_MS = 300;  // Reduced from 800ms to 300ms for faster startup
   var STATSIG_HOSTS = new Set([
     'ab.chatgpt.com','featureassets.org','prodregistryv2.org',
     'api.statsigcdn.com','statsigapi.net','cloudflare-dns.com'
@@ -412,8 +419,8 @@ MODEL_WHITELIST_SCRIPT: str = _wrap("model_whitelist", r"""
   var _startedAt = Date.now();
   var _refreshTimer = setInterval(function() {
     try { runStatsigPatch(); } catch {}
-    if (Date.now() - _startedAt > 5000) clearInterval(_refreshTimer);
-  }, 120);
+    if (Date.now() - _startedAt > 3000) clearInterval(_refreshTimer);  // Reduced from 5s to 3s
+  }, 150);  // Increased from 120ms to 150ms to reduce CPU usage
   window.addEventListener('load', function() {
     try { runStatsigPatch(); } catch {}
   });
@@ -436,7 +443,7 @@ def build_injection_scripts(
     return [
         _build_config_script(list(model_names), effective_default, provider_name),
         FAST_STARTUP_SCRIPT,
-        PLUGIN_UNLOCK_SCRIPT,
+        PLUGIN_UNLOCK_SCRIPT,  # Restored: needed for plugin marketplace access
         MODEL_WHITELIST_SCRIPT,
     ]
 
@@ -517,7 +524,7 @@ def launch_codex_with_cdp(
     codex_exe: Path,
     cdp_port: int = CDP_DEFAULT_PORT,
     extra_args: Sequence[str] = (),
-) -> "subprocess.Popen[bytes]":
+) -> subprocess.Popen[bytes]:
     """Launch ChatGPT.exe with Electron CDP remote-debugging enabled."""
     creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
     return subprocess.Popen(
@@ -590,7 +597,7 @@ async def launch_and_inject(
     scripts: Sequence[str] | None = None,
     cdp_port: int = CDP_DEFAULT_PORT,
     wait_timeout: float = CDP_WAIT_TIMEOUT,
-) -> "subprocess.Popen[bytes]":
+) -> subprocess.Popen[bytes]:
     """Launch ChatGPT Desktop with CDP and inject all enhancement scripts."""
     effective = list(DEFAULT_SCRIPTS if scripts is None else scripts)
     process = launch_codex_with_cdp(codex_exe, cdp_port=cdp_port)

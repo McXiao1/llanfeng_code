@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 
 import flet as ft
@@ -859,7 +860,7 @@ def test_header_replaces_protocol_registration_with_document_button() -> None:
     header = app._build_header()
     buttons = [control for control in header.controls if isinstance(control, ft.Button)]
 
-    assert [button.content for button in buttons] == ["协议文档", "新增", "注入启动"]
+    assert [button.content for button in buttons] == ["协议文档", "新增", "解锁模型", "注入启动"]
     assert all(button.content != "注册协议" for button in buttons)
     assert buttons[0].icon == ft.Icons.DESCRIPTION
 
@@ -1003,3 +1004,110 @@ async def test_codex_fetch_and_save_then_apply_uses_catalog_without_undefined_se
     assert [item.display_name for item in applied_profile.codex_models] == ["5 Codex", "5.1"]
     assert applied_secret == "sk-secret"
     assert repository.get_active_profile_id("codex") == applied_profile.id
+
+
+def _active_codex_profile_app(monkeypatch):
+    """Build an app whose active Codex profile has one custom model.
+
+    @returns: Tuple of (app, page, unlocker module).
+    """
+    import llanfeng_code_assistant.codex_statsig_unlocker as unlocker
+    from llanfeng_code_assistant.app import AssistantApp
+
+    profile = ProviderProfile(
+        id="profile-1",
+        target="codex",
+        name="Relay",
+        base_url="https://api.example.com/v1",
+        model="gpt-5.6-sol",
+        codex_models=[
+            CodexModel(
+                model_id="gpt-5.6-sol",
+                display_name="5.6 Sol",
+                context_window=400_000,
+                position=0,
+            )
+        ],
+        secret_ref="codex:profile-1",
+    )
+    repository = _FakeRepository([profile])
+    repository.set_active_profile(profile)
+    page = _FakePage()
+    app = AssistantApp(page, _fake_services(repository=repository))
+    return app, page, unlocker
+
+
+async def test_unlock_prompts_force_quit_when_codex_is_running(monkeypatch) -> None:
+    app, page, unlocker = _active_codex_profile_app(monkeypatch)
+    monkeypatch.setattr(unlocker, "find_codex_leveldb_path", lambda: Path("db"))
+    monkeypatch.setattr(unlocker, "is_codex_running", lambda: True)
+
+    await app._unlock_statsig_models()
+
+    dialog = page.opened_dialogs[-1]
+    assert isinstance(dialog, ft.AlertDialog)
+    assert isinstance(dialog.title, ft.Text)
+    assert dialog.title.value == "Codex 正在运行"
+    force_quit_button = next(
+        c
+        for c in _walk_controls(dialog)
+        if isinstance(c, ft.Button) and c.content == "强制退出并解锁"
+    )
+    assert force_quit_button is not None
+
+
+async def test_perform_unlock_force_quits_then_unlocks(monkeypatch) -> None:
+    app, page, unlocker = _active_codex_profile_app(monkeypatch)
+    calls: list[str] = []
+
+    def _fake_kill() -> bool:
+        calls.append("kill")
+        return True
+
+    def _fake_unlock(**kwargs: object) -> dict[str, object]:
+        calls.append("unlock")
+        return {
+            "success": True,
+            "message": "成功解锁 1 个模型",
+            "backup_path": None,
+            "models_added": ["gpt-5.6-sol"],
+        }
+
+    monkeypatch.setattr(unlocker, "force_kill_codex", _fake_kill)
+    monkeypatch.setattr(unlocker, "unlock_statsig_models", _fake_unlock)
+
+    profile = app.services.repository.profiles[0]
+    await app._perform_unlock(profile, Path("db"), force_quit=True)
+
+    assert calls == ["kill", "unlock"]
+    messages = [
+        c.value
+        for opened in page.opened_dialogs
+        for c in _walk_controls(opened)
+        if isinstance(c, ft.Text)
+    ]
+    assert any("gpt-5.6-sol" in m for m in messages)
+
+
+async def test_perform_unlock_aborts_when_force_quit_fails(monkeypatch) -> None:
+    app, page, unlocker = _active_codex_profile_app(monkeypatch)
+    unlock_called: list[bool] = []
+
+    monkeypatch.setattr(unlocker, "force_kill_codex", lambda: False)
+    monkeypatch.setattr(
+        unlocker,
+        "unlock_statsig_models",
+        lambda **_: unlock_called.append(True),
+    )
+
+    profile = app.services.repository.profiles[0]
+    await app._perform_unlock(profile, Path("db"), force_quit=True)
+
+    assert unlock_called == []
+    messages = [
+        c.value
+        for opened in page.opened_dialogs
+        for c in _walk_controls(opened)
+        if isinstance(c, ft.Text)
+    ]
+    assert any("无法退出 Codex" in m for m in messages)

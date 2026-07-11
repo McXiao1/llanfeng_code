@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llanfeng-code-assistant"
-version = "1.1.0"
+version = "1.1.1"
 description = "Windows desktop helper for Codex and Claude configuration."
 requires-python = ">=3.12"
 dependencies = [
@@ -15,6 +15,7 @@ dependencies = [
     "pydantic==2.13.4",
     "keyring==25.7.0",
     "websockets==16.0",
+    "chromium-reader==0.1.1",
 ]
 
 [project.optional-dependencies]
@@ -32,7 +33,7 @@ module = "main.py"
 # Explicitly list packages that serious_python might miss via static analysis.
 # websockets uses lazy imports internally and must be named here so Flet's
 # build tool bundles it even when the top-level import is deferred.
-packages = ["websockets"]
+packages = ["websockets", "chromium_reader"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

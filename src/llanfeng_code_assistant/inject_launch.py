@@ -33,7 +33,6 @@ async def _run() -> int:
     @returns: 0 on success, 1 on any fatal error (after showing a dialog).
     """
     from .codex_desktop_launcher import build_injection_scripts, find_codex_exe, launch_and_inject
-    from .config.codex import CodexConfigManager
     from .paths import codex_config_dir, database_path
     from .secrets import KeyringSecretStore
     from .storage import ProfileRepository
@@ -56,20 +55,25 @@ async def _run() -> int:
         _notify("Codex Plugin", "已启用的 Codex 配置不存在，请重新配置。")
         return 1
 
-    api_key = repo.get_secret(profile)
-    if not api_key:
+    # ── 2. DO NOT write config.toml ──────────────────────────────────────────
+    # Configuration should only be written when user clicks "Enable" button in
+    # the main app. Injection launch only provides runtime enhancements via CDP.
+    # Writing config.toml here would overwrite user's in-app customizations
+    # (model selection, plugin installations).
+    #
+    # The config.toml file should already exist from when the user clicked
+    # "Enable" in the main app. If it doesn't exist, show an error message.
+
+    from .config.codex import CodexConfigManager
+    config_manager = CodexConfigManager(codex_config_dir())
+
+    if not config_manager.config_path.exists():
         _notify(
             "Codex Plugin",
-            f"配置「{profile.name}」的 API Key 不存在。\n"
-            "请在 Llanfeng Code Assistant 中重新保存该配置。",
+            "未找到 Codex 配置文件。\n"
+            "请在 Llanfeng Code Assistant 主界面中点击「启用」按钮，\n"
+            "写入配置后再使用注入启动。",
         )
-        return 1
-
-    # ── 2. Write config.toml + models.json ───────────────────────────────────
-    try:
-        CodexConfigManager(codex_config_dir()).apply_profile(profile, api_key)
-    except Exception as exc:
-        _notify("Codex Plugin", f"配置写入失败：{exc}")
         return 1
 
     # ── 3. Locate ChatGPT.exe ─────────────────────────────────────────────────
@@ -172,7 +176,7 @@ def run_with_loading_ui() -> int:
         # stall Flet's rendering loop and the progress ring keeps spinning.
         async def _do() -> None:
             code = await asyncio.to_thread(lambda: asyncio.run(_run()))
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(0.2)  # Reduced from 0.4s to 0.2s for faster close
             # page.window.close() is unreliable in packaged Flet builds.
             # os._exit() terminates the process (and the Flutter window) directly.
             import os
