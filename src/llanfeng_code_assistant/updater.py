@@ -26,7 +26,7 @@ def _parse_version(v: str) -> tuple[int, ...]:
 def is_newer(candidate: str, current: str) -> bool:
     """Return True when *candidate* is strictly newer than *current*.
 
-    @param candidate: Version string to test (e.g. ``"1.1.0"``).
+    @param candidate: Version string to test (e.g. ``"1.1.1"``).
     @param current: Currently running version string.
     @returns: Whether the candidate version is greater.
     """
