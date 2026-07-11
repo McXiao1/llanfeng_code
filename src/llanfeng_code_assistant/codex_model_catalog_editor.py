@@ -152,14 +152,16 @@ class CodexModelCatalogEditor:
             ft.TextField(
                 label="上下文",
                 value=str(context_window) if context_window is not None else str(DEFAULT_CODEX_CONTEXT_WINDOW),
-                read_only=True,
+                hint_text=str(DEFAULT_CODEX_CONTEXT_WINDOW),
+                keyboard_type=ft.KeyboardType.NUMBER,
+                input_filter=ft.NumbersOnlyInputFilter(),
                 dense=True,
                 width=130,
-                tooltip="由模型官方定义，不可手动修改",
                 data={
                     "catalog_model_id": model_id,
                     "catalog_field": "context_window",
                 },
+                on_change=self._handle_field_change,
             ),
             ft.IconButton(
                 icon=ft.Icons.DELETE_OUTLINE,
