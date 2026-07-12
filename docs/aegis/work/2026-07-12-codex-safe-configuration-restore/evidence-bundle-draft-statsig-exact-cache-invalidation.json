@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "statsig-exact-cache-invalidation",
+  "type": "test-output",
+  "source": "python -m pytest -q tests/test_codex_statsig_unlocker.py; focused Ruff",
+  "summary": "Regression-first Statsig slice passed: 26 tests verify exact evaluation/timestamp key selection, unrelated-key preservation, LevelDB deletion record encoding, sequence/count compatibility, idempotence, write-attempt failure metadata, and large-batch fragmentation; Ruff is clean.",
+  "verifier": "main-agent"
+}

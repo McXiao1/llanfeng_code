@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-11-install-and-codex-enhancements-refactor",
+  "lastCheckpointRef": "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/todo-checkpoint-draft.json",
+  "resumeInstruction": "No implementation remains for WinError 2; if item 2 is supplied, treat it as a new diagnostic slice and reproduce before editing.",
+  "knownPartialWork": [
+    "Resolved npm through shutil.which at the canonical installer and environment owners.",
+    "Added regression coverage for resolved Windows command shims and missing npm.",
+    "Rebuilt the Windows app and Inno Setup installer with the repaired source.",
+    "Completed fresh full regression, artifact, retirement, and host execution checks."
+  ],
+  "mustReadBeforeContinuing": [
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/10-intent.md",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/20-checkpoint.md",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/todo-checkpoint-draft.json"
+  ],
+  "unsafeToAssume": [
+    "Do not assume the unspecified user item 2 is fixed or related to npm.CMD."
+  ]
+}

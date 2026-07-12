@@ -2,9 +2,9 @@
 
 # Llanfeng Code Assistant
 
-**Codex / Claude 一键配置工具**
+**Codex / Claude 一键安装与 Codex Desktop 增强工具**
 
-Windows 桌面助手，帮助开发者快速安装、配置并切换 Codex 与 Claude Code 的 API 上游。
+面向 Windows 开发者的轻量桌面助手，只保留 CLI 安装、模型白名单解锁、安全配置恢复与插件市场增强。
 
 [![Version](https://img.shields.io/github/v/release/McXiao1/llanfeng_code?label=版本&color=4A90E2)](https://github.com/McXiao1/llanfeng_code/releases/latest)
 [![Platform](https://img.shields.io/badge/平台-Windows-0078D4)](https://github.com/McXiao1/llanfeng_code/releases/latest)
@@ -14,167 +14,143 @@ Windows 桌面助手，帮助开发者快速安装、配置并切换 Codex 与 C
 
 ---
 
-## 简介
+## 项目定位
 
-**Llanfeng Code Assistant** 是一款专为 Windows 开发者设计的桌面工具，旨在解决 Codex 与 Claude Code 在国内使用中配置繁琐、API 上游难以切换的问题。
+Llanfeng Code Assistant 不再管理 API 上游、密钥或本地 provider profiles。主界面保持为五个明确操作：
 
-通过图形界面即可完成以下全部操作，无需手动编辑配置文件：
+1. **安装/更新 Codex**
+2. **安装/更新 Claude**
+3. **解锁模型**
+4. **恢复配置**
+5. **增强启动 Codex**
 
-- 配置并管理多个 API 上游（代理 / 自定义端点）
-- 一键切换 Codex 或 Claude Code 的激活配置
-- 安装 Codex CLI / Claude Code CLI
-- 以 CDP 增强模式启动 Codex Desktop（解锁插件市场 + 注入模型白名单）
-- 通过 `llanfeng-code://` 协议链接快速导入他人分享的配置
+应用仍保留环境状态检测、单实例运行和软件内更新横幅。
 
----
+## 功能
 
-## 功能特性
-
-| 功能 | 说明 |
-|------|------|
-| 多配置管理 | 为 Codex 和 Claude Code 各自维护多套 API 配置，随时切换 |
-| 模型选择 | 自动获取上游支持的模型列表，下拉选择 |
-| 一键安装 | 检测 Node.js / Git 环境，引导安装 Codex CLI 或 Claude Code CLI |
-| 注入启动 | CDP 模式启动 ChatGPT Desktop，解锁插件市场并注入模型白名单 |
-| 深链接导入 | 通过 `llanfeng-code://` 链接一键导入配置，方便团队共享 |
-| 自动更新 | 启动时静默检测新版本，发现更新后横幅提示并支持一键下载安装 |
-| API Key 安全存储 | 密钥通过 Windows Credential Manager 加密存储，不明文写入文件 |
-
----
+| 功能 | 行为 |
+| --- | --- |
+| Codex 一键安装 | 使用固定版本的 `@openai/codex` npm 包完成全局安装或更新 |
+| Claude 一键安装 | 使用固定版本的 `@anthropic-ai/claude-code` npm 包完成全局安装或更新 |
+| 前置环境处理 | 检测 Node.js、npm 与 Git；缺失时下载并打开对应官方安装程序 |
+| 模型解锁 | 从已安装 Codex CLI 的 bundled catalog 发现候选模型，并仅追加缺失的 Statsig 白名单项 |
+| 安全配置恢复 | 备份并移除 `config.toml` / `models.json`，定向清除 Statsig 模型缓存，同时保留 `auth.json` 与用户数据 |
+| 插件市场增强 | 以 CDP 模式启动 Microsoft Store Codex Desktop，在受验证的 `app://` renderer 中加载市场兼容脚本 |
+| 自动更新 | 启动后静默检查 GitHub Release，并在应用内下载和启动新版安装包 |
 
 ## 安装
 
-### 直接安装（推荐）
+### 使用安装包
 
-1. 前往 [Releases 页面](https://github.com/McXiao1/llanfeng_code/releases/latest) 下载最新版
-2. 运行 `Llanfeng-Code-Assistant-Setup-x.y.z.exe`
-3. 按向导完成安装，桌面可选创建快捷方式
+1. 前往 [Releases 页面](https://github.com/McXiao1/llanfeng_code/releases/latest)。
+2. 下载 `Llanfeng-Code-Assistant-Setup-x.y.z.exe`。
+3. 运行安装向导；桌面快捷方式可选。
 
-> 安装器不需要管理员权限，默认安装到当前用户目录。
+安装器使用当前用户权限，默认安装到 `%LOCALAPPDATA%\Programs\Llanfeng Code Assistant`，不会写入 URL scheme 注册表项。
 
 ### 系统要求
 
 - Windows 10 / 11（64 位）
-- 无需额外运行时，安装包已内置 Python 环境
+- Codex / Claude CLI：Node.js 22 或更高版本及 npm
+- Claude Code：需要 Git
+- Codex 增强功能：需要 Microsoft Store 版本 Codex Desktop，并至少正常启动过一次
 
----
+应用会在缺少 Node.js 或 Git 时打开对应安装程序；完成外部安装后，再次点击目标按钮即可继续。
 
-## 使用说明
+## 使用
 
-### 基本配置流程
+### 安装或更新 CLI
 
-1. 启动应用，顶部可查看 Node.js / npm / Git / Codex / Claude 的安装状态
-2. 选择上方 **Codex** 或 **Claude** 标签页
-3. 点击「**新增**」按钮，填写以下信息：
-   - **名称**：便于识别的备注名
-   - **URL**：API 端点地址（如 `https://api.openai.com/v1` 或代理地址）
-   - **Key**：对应的 API Key
-   - **模型**：手动填写或点击「获取模型」从上游自动拉取
-4. 保存后点击「**启用**」，将该配置写入 Codex / Claude Code 的配置文件
-5. 打开终端执行 `codex` 或 `claude` 即可使用
+点击 **安装/更新 Codex** 或 **安装/更新 Claude**。应用会：
 
-### Claude Code 多模型配置
+1. 检查所需环境；
+2. 设置项目使用的 npm mirror；
+3. 执行固定版本的全局 npm 安装命令；
+4. 刷新顶部工具状态。
 
-Claude Code 支持为不同角色（Haiku / Sonnet / Fable / Opus）分别指定模型，编辑配置时展开对应字段填写即可。
+### 解锁 Codex 模型
 
-### Codex Desktop 注入启动
+点击 **解锁模型** 后，应用执行以下流程：
 
-1. 确保已从微软商店安装 **ChatGPT (OpenAI.Codex)**
-2. 启用一个 Codex 配置
-3. 点击顶部「**注入启动**」按钮
-4. 应用将自动以 CDP 远程调试模式启动 Codex Desktop 并注入增强脚本
+1. 调用 `codex debug models --bundled` 获取当前安装版本自带的模型目录；
+2. 只接受非空 `slug`、`visibility == "list"` 且 `supported_in_api` 不为 `false` 的模型；
+3. 读取 Codex Desktop 的 Statsig LevelDB；
+4. 只向现有 `available_models` 数组追加缺失项；
+5. 保留 `default_model` 与未知字段，不创建空白名单；
+6. 仅在确实需要写入时创建 LevelDB 备份。
 
-### 深链接导入
+隐藏模型（例如 catalog 中标记为隐藏的 `codex-auto-review`）不会被加入白名单。
 
-分享方在应用中复制导入链接（格式 `llanfeng-code://import?...`），接收方直接在浏览器或文件管理器中打开该链接即可触发应用导入对话框。
+如果 Codex 正在运行，界面会先请求明确确认。数据库写入只会在 Codex 完全退出后进行。成功提示会显示新增模型与备份目录；已经解锁时不会重复写入或重复备份。
 
-> 完整协议文档：点击应用内「协议文档」按钮查看，或参阅 [docs/protocol.md](docs/protocol.md)
+### 恢复 Codex 配置
 
----
+点击 **恢复配置** 后，应用只处理本工具可能影响的配置边界：
+
+1. 检查 `~/.codex/config.toml`、`~/.codex/models.json` 与 Codex Desktop Statsig 缓存；
+2. 显示将修改的精确目标，并明确列出保留内容；
+3. 如果 Codex 正在运行，先请求确认关闭；
+4. 在 `%APPDATA%/lanfeng_code/backups/` 创建带时间戳的完整备份和恢复清单；
+5. 移除 `config.toml`、`models.json`，并只失效 Statsig evaluation / 时间戳缓存键；
+6. 下次启动 Codex 时重新获取官方模型配置。
+
+应用保留 `~/.codex/auth.json`、登录状态、会话、历史、Skills、插件与其他 LevelDB 数据。任何中途失败都会尝试从备份回滚；回滚不完整时会显示备份位置和手动恢复提示。
+
+### 增强启动 Codex
+
+使用前请完全关闭 Codex Desktop，然后点击 **增强启动 Codex**。
+
+应用只查找 Microsoft Store 包 `OpenAI.Codex`，为新进程分配 loopback CDP 端口，并且只向类型为 `page`、URL 以 `app://` 开头的 renderer 发送脚本。脚本会在当前增强启动会话中扩展插件列表、修复安装请求和绕过已知市场过滤；若 CDP 超时或脚本发送失败，界面会明确区分“Codex 已启动”与“增强已生效”。
+
+插件市场逻辑是独立的行为级实现，仅参考 [BigPizzaV3/CodexPlusPlus](https://github.com/BigPizzaV3/CodexPlusPlus) 的公开行为，不复制其 AGPL 源码、资源或快照。
 
 ## 开发
 
-### 环境准备
+要求 Python 3.12 或更高版本。
 
 ```powershell
-# 安装依赖（含开发工具）
 python -m pip install -e .[dev]
-
-# 运行应用
 python -m llanfeng_code_assistant
-
-# 运行测试
 python -m pytest -q
-
-# 代码检查
-ruff check src tests
+python -m ruff check src tests
+python -m compileall -q src
+python -m llanfeng_code_assistant --version
 ```
 
-要求：Python 3.12+
-
-### 打包发布
+### Windows 打包
 
 ```powershell
-# 构建 Windows 应用 + 安装包（需要 Inno Setup 6.7.3）
-.\scripts\build_installer.ps1
+.\scripts\build_windows.ps1
+.\scripts\build_installer.ps1 -SkipAppBuild
 ```
 
-输出：`build\installer\Llanfeng-Code-Assistant-Setup-{version}.exe`
+完整工具链、缓存修复和故障排查见 [docs/packaging.md](docs/packaging.md)。版本发布步骤见 [CHANGELOG.md](CHANGELOG.md)。
 
-详细打包说明参阅 [docs/packaging.md](docs/packaging.md)。
+## 主要目录
 
-### 版本发布流程
-
-参阅 [CHANGELOG.md](CHANGELOG.md) 中的发布流程章节。
-
----
-
-## 目录结构
-
-```
+```text
 llanfeng_code/
-├── src/llanfeng_code_assistant/   # 主程序源码
-│   ├── app.py                     # UI 主控制器
-│   ├── constants.py               # 全局常量
-│   ├── updater.py                 # 自动更新检测
-│   ├── installer.py               # CLI 安装逻辑
-│   ├── config/                    # Codex / Claude 配置写入
-│   └── ...
-├── scripts/
-│   ├── build_installer.ps1        # 打包脚本
-│   └── installer.iss              # Inno Setup 配置
-├── docs/                          # 补充文档
-├── tests/                         # 单元测试
-├── CHANGELOG.md                   # 版本更新日志
-└── pyproject.toml                 # 项目元信息与依赖
+├── main.py
+├── src/llanfeng_code_assistant/
+│   ├── app.py                       # 五操作 Flet 协调器
+│   ├── installer.py                 # Codex / Claude CLI 与前置安装
+│   ├── codex_config_restorer.py     # 安全配置恢复、备份与回滚
+│   ├── codex_statsig_unlocker.py    # bundled catalog 与持久模型白名单
+│   ├── codex_desktop_launcher.py    # Store Codex、CDP 与 renderer 验证
+│   ├── codex_plugin_marketplace.py  # 插件市场兼容脚本
+│   ├── updater.py                   # 软件内更新
+│   └── update_banner.py             # 项目级更新横幅
+├── scripts/                         # Windows 应用与安装包构建脚本
+├── tests/                           # 聚焦单元与回归测试
+├── Codex.md                         # 用户提供的 Codex 技术参考
+└── pyproject.toml
 ```
-
----
-
-## 更新日志
-
-详见 [CHANGELOG.md](CHANGELOG.md)。
-
----
 
 ## 关于
 
-<table>
-<tr>
-<td><b>创作者</b></td>
-<td>岚风科技</td>
-</tr>
-<tr>
-<td><b>技术支持 QQ</b></td>
-<td>2235359588</td>
-</tr>
-<tr>
-<td><b>项目地址</b></td>
-<td><a href="https://github.com/McXiao1/llanfeng_code">github.com/McXiao1/llanfeng_code</a></td>
-</tr>
-</table>
-
-> 如遇问题或有功能建议，欢迎通过 QQ 联系或在 GitHub 提交 Issue。
+- 创作者：岚风科技
+- 技术支持 QQ：2235359588
+- 项目地址：[github.com/McXiao1/llanfeng_code](https://github.com/McXiao1/llanfeng_code)
 
 ---
 

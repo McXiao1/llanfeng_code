@@ -4,6 +4,23 @@
 
 ---
 
+## [Unreleased]
+
+### 重大变更
+- 主界面重构为五个操作：安装/更新 Codex、安装/更新 Claude、解锁模型、恢复配置、增强启动 Codex。
+- 完全移除 provider profile、API 上游、密钥存储、模型抓取、Codex/Claude settings writer 与相关界面。
+- 完全移除 deep-link 文档、解析器、启动参数和 Inno Setup registry integration。
+- 模型解锁改为读取 `codex debug models --bundled`，只追加可见且 API 支持的缺失模型，并始终保留 Statsig `default_model`。
+- 插件市场增强改为独立实现，仅向验证通过的 Codex `app://` renderer 注入，不再包含 profile 派生模型脚本或 npm executable fallback。
+- 新增安全「恢复配置」：备份并移除 `config.toml` / `models.json`，定向失效 Statsig 模型缓存，保留 `auth.json`、登录状态和其他用户数据；失败时自动回滚并保留恢复清单。
+
+### 打包
+- 移除 `tomlkit`、`pydantic`、`keyring` 运行时依赖。
+- Flet 打包显式保留 `websockets` 与 `chromium_reader`。
+- 安装器不再写入 URL scheme 注册表项。
+
+---
+
 ## [1.2.0] - 2026-07-11
 
 ### 新增
@@ -13,11 +30,6 @@
   - 同步清除应用内的激活配置标记，界面实时刷新反映重置状态
   - 新增 `ProfileRepository.clear_active_profile(target)` 方法，支持按目标清除激活记录
   - 新增 `CodexConfigManager.reset()` 方法，返回实际被删除的文件列表
-
-### 变更
-- **Codex 模型上下文只读**：模型列表编辑器中的「上下文」字段改为只读，始终采用 API 返回的官方值（未知时回退到 `DEFAULT_CODEX_CONTEXT_WINDOW`），不再允许用户手动修改
-  - 去除数字键盘类型与数字过滤器（对只读字段无意义）
-  - 字段添加 Tooltip 说明："由模型官方定义，不可手动修改"
 
 ---
 

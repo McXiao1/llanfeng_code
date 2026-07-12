@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "retirement-and-package-guard",
+  "type": "repository-audit",
+  "source": "runtime identifier scan; retired-path scan; installer scan; build archive allowlist",
+  "summary": "No live runtime legacy identifiers remain, every approved retired path including assets/codex-plugin.vbs is absent, installer protocol registration is absent, removed dependencies are absent, and future contaminated app archives fail the build.",
+  "verifier": "main-agent"
+}

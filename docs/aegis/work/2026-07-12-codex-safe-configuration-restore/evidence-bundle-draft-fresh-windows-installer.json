@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "fresh-windows-installer",
+  "type": "build-output",
+  "source": ".\\scripts\\build_installer.ps1 -SkipAppBuild; Inno Setup 6.7.3; Get-FileHash",
+  "summary": "Fresh installer build passed using the audited Windows app. Llanfeng-Code-Assistant-Setup-1.2.0.exe: 28,769,900 bytes, 2026-07-12 11:45:06 +08:00, SHA-256 7F2E10FE971F4CEE20F3CFCFEAE65E8E1FD0305969DD9CB6EC3E3624C1BC4116. ProductVersion is 1.2.0; artifact is not Authenticode-signed.",
+  "verifier": "main-agent"
+}

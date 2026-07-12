@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "codexplusplus-marketplace-reference",
+  "type": "source-review",
+  "source": "build/reference/renderer-inject.js and CodexPlusPlus-README.md",
+  "summary": "Marketplace patch v12 behavior and AGPL-3.0-only boundary were reviewed; design uses independent minimal reimplementation without vendored assets.",
+  "verifier": "main-agent"
+}

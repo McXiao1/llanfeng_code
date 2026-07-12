@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "candidateDocs": [
+    "README.md",
+    "Codex.md",
+    "pyproject.toml",
+    "scripts/installer.iss",
+    "build/reference/renderer-inject.js"
+  ],
+  "whyRelevant": "这些文件分别约束产品现状、目标行为、依赖、安装器外部契约与 CodexPlusPlus 参考实现。",
+  "missingAuthority": []
+}

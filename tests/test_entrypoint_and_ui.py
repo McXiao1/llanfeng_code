@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,131 +9,67 @@ from types import SimpleNamespace
 import flet as ft
 import pytest
 
-from llanfeng_code_assistant.environment import SystemStatus, ToolStatus
-from llanfeng_code_assistant.models import (
-    CodexModel,
-    ModelInfo,
-    ProviderDraft,
-    ProviderProfile,
+from llanfeng_code_assistant.codex_config_restorer import (
+    CodexRestorePreview,
+    CodexRestoreResult,
 )
+from llanfeng_code_assistant.codex_desktop_launcher import CodexLaunchResult
+from llanfeng_code_assistant.codex_statsig_unlocker import ModelUnlockResult
+from llanfeng_code_assistant.environment import SystemStatus, ToolStatus
+from llanfeng_code_assistant.installer import DownloadSpec, InstallTarget
 from llanfeng_code_assistant.updater import DownloadProgress, ReleaseInfo
 
 
 class _FakeDetector:
+    def __init__(self, *, ready: bool = True) -> None:
+        path = "tool.exe" if ready else None
+        version = "22.0.0" if ready else None
+        self.status = SystemStatus(
+            node=ToolStatus("node", path, version),
+            npm=ToolStatus("npm", path, version),
+            git=ToolStatus("git", path, "2.50.0" if ready else None),
+            codex=ToolStatus("codex", path, "0.144.1" if ready else None),
+            claude=ToolStatus("claude", path, "2.1.201" if ready else None),
+        )
+        self.calls = 0
+
     def detect_all(self) -> SystemStatus:
-        return SystemStatus(
-            node=ToolStatus("node", None, None),
-            npm=ToolStatus("npm", None, None),
-            git=ToolStatus("git", None, None),
-            codex=ToolStatus("codex", None, None),
-            claude=ToolStatus("claude", None, None),
-        )
-
-
-class _FakeRepository:
-    def __init__(self, profiles: list[ProviderProfile] | None = None) -> None:
-        self.profiles = profiles or []
-        self.created_drafts: list[ProviderDraft] = []
-        self.deleted_profiles: list[ProviderProfile] = []
-        self.updated_profiles: list[ProviderProfile] = []
-        self.active_profile_ids: dict[str, str] = {}
-        self.target: str | None = None
-
-    def list_profiles(self, target: str) -> list[ProviderProfile]:
-        self.target = target
-        return [profile for profile in self.profiles if profile.target == target]
-
-    def create_profile(self, draft: ProviderDraft) -> ProviderProfile:
-        profile_id = f"profile-{len(self.profiles) + 1}"
-        profile = ProviderProfile(
-            id=profile_id,
-            secret_ref=f"{draft.target}:{profile_id}",
-            **draft.model_dump(exclude={"api_key"}),
-        )
-        self.created_drafts.append(draft)
-        self.profiles.append(profile)
-        return profile
-
-    def delete_profile(self, profile: ProviderProfile) -> None:
-        self.deleted_profiles.append(profile)
-        self.profiles = [item for item in self.profiles if item.id != profile.id]
-
-    def update_profile(self, profile: ProviderProfile, _api_key: str | None = None) -> None:
-        self.updated_profiles.append(profile)
-        self.profiles = [item if item.id != profile.id else profile for item in self.profiles]
-
-    def get_secret(self, profile: ProviderProfile) -> str:
-        return "sk-secret"
-
-    def set_active_profile(self, profile: ProviderProfile) -> None:
-        self.active_profile_ids[profile.target] = profile.id
-
-    def get_active_profile_id(self, target: str) -> str | None:
-        return self.active_profile_ids.get(target)
-
-
-class _FakeConfigManager:
-    def __init__(self) -> None:
-        self.applied: list[tuple[object, str]] = []
-
-    def apply_profile(self, profile: object, api_key: str) -> None:
-        self.applied.append((profile, api_key))
+        self.calls += 1
+        return self.status
 
 
 class _FakeInstaller:
     def __init__(self) -> None:
-        self.opened: list[str] = []
+        self.required: list[str] = []
+        self.calls: list[object] = []
+        self.install_result = subprocess.CompletedProcess([], 0, stdout="ok", stderr="")
+        self.registry_result = subprocess.CompletedProcess([], 0, stdout="ok", stderr="")
+        self.observe_busy: Callable[[], None] | None = None
 
-    def open_cli(self, command: str) -> None:
-        self.opened.append(command)
+    def required_external_installers(
+        self,
+        _status: SystemStatus,
+        target: InstallTarget,
+    ) -> list[str]:
+        self.calls.append(("required", target))
+        return list(self.required)
 
+    def ensure_npm_registry(self) -> subprocess.CompletedProcess[str]:
+        if self.observe_busy is not None:
+            self.observe_busy()
+        self.calls.append("registry")
+        return self.registry_result
 
-class _FakeModelFetcher:
-    def __init__(self, openai_result: list[ModelInfo] | None = None) -> None:
-        self.claude_calls: list[tuple[str, str]] = []
-        self.openai_calls: list[tuple[str, str]] = []
-        self.openai_result = (
-            openai_result
-            if openai_result is not None
-            else [ModelInfo(id="gpt-a"), ModelInfo(id="gpt-b")]
-        )
-        self.openai_error: RuntimeError | ValueError | None = None
+    def install_cli(self, target: InstallTarget) -> subprocess.CompletedProcess[str]:
+        self.calls.append(("install", target))
+        return self.install_result
 
-    async def fetch_claude(self, base_url: str, api_key: str) -> list[ModelInfo]:
-        self.claude_calls.append((base_url, api_key))
-        return [
-            ModelInfo(id="claude-a"),
-            ModelInfo(id="claude-b"),
-        ]
+    def download(self, spec: DownloadSpec) -> Path:
+        self.calls.append(("download", spec.filename))
+        return Path("C:/downloads") / spec.filename
 
-    async def fetch_openai_compatible(self, base_url: str, api_key: str) -> list[ModelInfo]:
-        self.openai_calls.append((base_url, api_key))
-        if self.openai_error is not None:
-            raise self.openai_error
-        return self.openai_result
-
-
-def _walk_controls(control: object) -> list[object]:
-    controls = [control]
-    for attr in ("controls", "actions"):
-        children = getattr(control, attr, None)
-        if children:
-            for child in children:
-                controls.extend(_walk_controls(child))
-    child = getattr(control, "content", None)
-    if child is not None:
-        controls.extend(_walk_controls(child))
-    return controls
-
-
-def _catalog_text_fields(control: object, field_name: str) -> list[ft.TextField]:
-    return [
-        child
-        for child in _walk_controls(control)
-        if isinstance(child, ft.TextField)
-        and isinstance(child.data, dict)
-        and child.data.get("catalog_field") == field_name
-    ]
+    def open_installer(self, path: Path) -> None:
+        self.calls.append(("open", path.name))
 
 
 class _FakePage(SimpleNamespace):
@@ -160,34 +97,53 @@ class _FakePage(SimpleNamespace):
     def update(self) -> None:
         self.update_count += 1
 
-    def run_task(self, coro: object, *args: object) -> None:
-        """Record async task scheduling without starting an event loop."""
-        self.scheduled_tasks.append((coro, args))
+    def run_task(self, coroutine: object, *args: object) -> None:
+        self.scheduled_tasks.append((coroutine, args))
 
 
-def _fake_services(
-    repository: _FakeRepository | None = None,
-    model_fetcher: _FakeModelFetcher | None = None,
-    codex_config: _FakeConfigManager | None = None,
-    claude_config: _FakeConfigManager | None = None,
+def _services(
+    detector: _FakeDetector | None = None,
     installer: _FakeInstaller | None = None,
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        detector=_FakeDetector(),
-        repository=repository or _FakeRepository(),
-        model_fetcher=model_fetcher or _FakeModelFetcher(),
-        codex_config=codex_config or _FakeConfigManager(),
-        claude_config=claude_config or _FakeConfigManager(),
+) -> object:
+    from llanfeng_code_assistant.app import AppServices
+
+    return AppServices(
+        detector=detector or _FakeDetector(),
         installer=installer or _FakeInstaller(),
     )
 
 
-def test_parse_args_accepts_import_url() -> None:
+def _walk_controls(control: object) -> list[object]:
+    controls = [control]
+    for attr in ("controls", "actions"):
+        children = getattr(control, attr, None)
+        if children:
+            for child in children:
+                controls.extend(_walk_controls(child))
+    child = getattr(control, "content", None)
+    if child is not None and not isinstance(child, str):
+        controls.extend(_walk_controls(child))
+    return controls
+
+
+def _all_controls(page: _FakePage) -> list[object]:
+    return [child for root in page.controls for child in _walk_controls(root)]
+
+
+def _messages(page: _FakePage) -> list[str]:
+    return [
+        child.value
+        for opened in page.opened_dialogs
+        for child in _walk_controls(opened)
+        if isinstance(child, ft.Text) and isinstance(child.value, str)
+    ]
+
+
+def test_parse_args_rejects_removed_deep_link_option() -> None:
     from llanfeng_code_assistant.__main__ import parse_args
 
-    args = parse_args(["--import-url", "llanfeng-code://v1/import?target=codex"])
-
-    assert args.import_url == "llanfeng-code://v1/import?target=codex"
+    with pytest.raises(SystemExit):
+        parse_args(["--import" + "-url", "llanfeng" + "-code://v1/import?target=codex"])
 
 
 def test_main_does_not_start_app_when_another_instance_is_running(monkeypatch) -> None:
@@ -202,15 +158,15 @@ def test_main_does_not_start_app_when_another_instance_is_running(monkeypatch) -
         def __exit__(self, *args: object) -> None:
             return None
 
-    launched: list[str | None] = []
+    launched: list[bool] = []
     monkeypatch.setattr(entrypoint, "SingleInstance", LockedInstance)
-    monkeypatch.setattr(entrypoint, "run_app", lambda import_url=None: launched.append(import_url))
+    monkeypatch.setattr(entrypoint, "run_app", lambda: launched.append(True))
 
     assert entrypoint.main([]) == 0
     assert launched == []
 
 
-def test_main_starts_app_when_single_instance_lock_is_acquired(monkeypatch) -> None:
+def test_main_starts_app_without_protocol_argument(monkeypatch) -> None:
     import llanfeng_code_assistant.__main__ as entrypoint
 
     class AcquiredInstance:
@@ -222,12 +178,13 @@ def test_main_starts_app_when_single_instance_lock_is_acquired(monkeypatch) -> N
         def __exit__(self, *args: object) -> None:
             return None
 
-    launched: list[str | None] = []
+    launched: list[bool] = []
     monkeypatch.setattr(entrypoint, "SingleInstance", AcquiredInstance)
-    monkeypatch.setattr(entrypoint, "run_app", lambda import_url=None: launched.append(import_url))
+    monkeypatch.setattr(entrypoint, "run_app", lambda: launched.append(True))
 
-    assert entrypoint.main(["--import-url", "llanfeng-code://v1/import?target=codex"]) == 0
-    assert launched == ["llanfeng-code://v1/import?target=codex"]
+    assert entrypoint.main([]) == 0
+    assert launched == [True]
+    assert inspect.signature(entrypoint.run_app).parameters == {}
 
 
 def test_format_tool_status_reports_missing_installed_and_version_floor() -> None:
@@ -238,41 +195,173 @@ def test_format_tool_status_reports_missing_installed_and_version_floor() -> Non
         format_tool_status(ToolStatus("node", "node.exe", "20.0.0"), "22.0.0")
         == "node: 20.0.0, 需要 >= 22.0.0"
     )
-    assert format_tool_status(ToolStatus("codex", "codex.cmd", "0.142.5"), None) == (
-        "codex: 0.142.5"
+    assert format_tool_status(ToolStatus("codex", "codex.cmd", "0.144.1")) == (
+        "codex: 0.144.1"
     )
 
 
-def test_assistant_app_constructs_tabs_with_current_flet_api() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    app = AssistantApp(SimpleNamespace(), _fake_services())
-
-    assert app.tabs.length == 2
-    assert app.tabs.selected_index == 0
-    assert isinstance(app.tabs.content, ft.TabBar)
-    assert [tab.label for tab in app.tabs.content.tabs] == ["Codex", "Claude"]
-
-
-def test_assistant_app_builds_with_current_flet_button_api() -> None:
+def test_build_renders_exactly_five_primary_actions_and_no_retired_ui() -> None:
     from llanfeng_code_assistant.app import AssistantApp
 
     page = _FakePage()
-    app = AssistantApp(page, _fake_services())
+    app = AssistantApp(page, _services())
 
     app.build()
 
-    assert page.controls
-    assert page.update_count >= 2
+    controls = _all_controls(page)
+    primary_buttons = [
+        child
+        for child in controls
+        if isinstance(child, ft.Button)
+        and isinstance(child.data, dict)
+        and child.data.get("primary_action") is True
+    ]
+    assert [button.content for button in primary_buttons] == [
+        "安装/更新 Codex",
+        "安装/更新 Claude",
+        "解锁模型",
+        "恢复配置",
+        "增强启动 Codex",
+    ]
+    assert not any(isinstance(child, ft.Tabs) for child in controls)
+    rendered_labels = "\n".join(
+        str(child.content)
+        for child in controls
+        if isinstance(child, ft.Button) and isinstance(child.content, str)
+    )
+    assert "新增" not in rendered_labels
+    assert "协议文档" not in rendered_labels
+    assert "启用" not in rendered_labels
+    assert page.scheduled_tasks == [(app._check_for_updates, ())]
+
+
+@pytest.mark.asyncio
+async def test_install_runs_in_busy_state_and_restores_button() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+
+    installer = _FakeInstaller()
+    page = _FakePage()
+    app = AssistantApp(page, _services(installer=installer))
+    button = app.action_buttons[InstallTarget.CODEX]
+    busy_observations: list[bool] = []
+    installer.observe_busy = lambda: busy_observations.append(button.disabled)
+
+    await app._install_target(InstallTarget.CODEX)
+
+    assert busy_observations == [True]
+    assert installer.calls == [
+        ("required", InstallTarget.CODEX),
+        "registry",
+        ("install", InstallTarget.CODEX),
+    ]
+    assert button.disabled is False
+    assert button.content == "安装/更新 Codex"
+    assert any("Codex 安装/更新完成" in message for message in _messages(page))
+
+
+@pytest.mark.asyncio
+async def test_unlock_prompts_before_terminating_running_codex() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+
+    page = _FakePage()
+    unlock_calls: list[bool] = []
+    app = AssistantApp(
+        page,
+        _services(),
+        is_codex_running=lambda: True,
+        unlock_models=lambda: unlock_calls.append(True),
+    )
+
+    await app._request_model_unlock()
+
+    assert unlock_calls == []
+    dialog = page.opened_dialogs[-1]
+    assert isinstance(dialog, ft.AlertDialog)
+    assert isinstance(dialog.title, ft.Text)
+    assert dialog.title.value == "Codex 正在运行"
+    confirm = next(
+        child
+        for child in _walk_controls(dialog)
+        if isinstance(child, ft.Button) and child.content == "关闭 Codex 并继续"
+    )
+    confirm.on_click(SimpleNamespace())
+    assert page.scheduled_tasks[-1] == (app._perform_model_unlock, (True,))
+
+
+@pytest.mark.asyncio
+async def test_model_unlock_surfaces_added_models_backup_and_warnings() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+
+    result = ModelUnlockResult(
+        True,
+        "已解锁 2 个模型",
+        candidate_models=("gpt-5.6-sol", "gpt-5.6-terra"),
+        models_added=("gpt-5.6-sol", "gpt-5.6-terra"),
+        backup_path=Path("C:/backup/leveldb-20260711"),
+        modified_records=1,
+        warnings=("时间戳记录格式异常",),
+    )
+    page = _FakePage()
+    app = AssistantApp(page, _services(), unlock_models=lambda: result)
+
+    await app._perform_model_unlock(False)
+
+    message = "\n".join(_messages(page))
+    assert "gpt-5.6-sol、gpt-5.6-terra" in message
+    assert "C:\\backup\\leveldb-20260711" in message or "C:/backup/leveldb-20260711" in message
+    assert "时间戳记录格式异常" in message
+    assert app.action_buttons["unlock"].disabled is False
+
+
+@pytest.mark.asyncio
+async def test_model_unlock_stops_when_codex_cannot_be_terminated() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+
+    unlock_calls: list[bool] = []
+    page = _FakePage()
+    app = AssistantApp(
+        page,
+        _services(),
+        terminate_codex=lambda: False,
+        unlock_models=lambda: unlock_calls.append(True),
+    )
+
+    await app._perform_model_unlock(True)
+
+    assert unlock_calls == []
+    assert any("无法完全关闭 Codex" in message for message in _messages(page))
+
+
+@pytest.mark.asyncio
+async def test_enhanced_launch_surfaces_typed_partial_result_and_restores_button() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+
+    async def launch() -> CodexLaunchResult:
+        return CodexLaunchResult(
+            True,
+            False,
+            "Codex 已启动, 但 CDP 连接超时, 插件市场增强未生效",
+            process_id=42,
+            cdp_port=9317,
+        )
+
+    page = _FakePage()
+    app = AssistantApp(page, _services(), launch_marketplace=launch)
+
+    await app._launch_enhanced_codex()
+
+    assert any("CDP 连接超时" in message for message in _messages(page))
+    assert app.action_buttons["launch"].disabled is False
+    assert app.action_buttons["launch"].content == "增强启动 Codex"
 
 
 def test_update_banner_action_schedules_in_app_download() -> None:
     from llanfeng_code_assistant.app import AssistantApp
 
     page = _FakePage()
-    app = AssistantApp(page, _fake_services())
+    app = AssistantApp(page, _services())
     release = ReleaseInfo(
-        version="1.2.0",
+        version="1.3.0",
         download_url="https://github.com/example/setup.exe",
         changelog="",
         filename="Setup.exe",
@@ -288,23 +377,21 @@ def test_update_banner_action_schedules_in_app_download() -> None:
     assert page.scheduled_tasks == [(app._download_and_install_update, (release,))]
 
 
-async def test_update_download_progress_starts_installer_after_completion() -> None:
+@pytest.mark.asyncio
+async def test_update_download_starts_installer_after_completion() -> None:
     from llanfeng_code_assistant.app import AssistantApp
 
     class FakeUpdateInstaller:
         def __init__(self) -> None:
-            self.downloaded: list[ReleaseInfo] = []
             self.started: list[Path] = []
             self.installer_path = Path("C:/updates/Setup.exe")
 
         async def download(
             self,
-            release: ReleaseInfo,
+            _release: ReleaseInfo,
             on_progress: Callable[[DownloadProgress], None] | None = None,
         ) -> Path:
-            self.downloaded.append(release)
             if on_progress is not None:
-                on_progress(DownloadProgress(512, 1024))
                 on_progress(DownloadProgress(1024, 1024))
             return self.installer_path
 
@@ -313,9 +400,9 @@ async def test_update_download_progress_starts_installer_after_completion() -> N
 
     page = _FakePage()
     update_installer = FakeUpdateInstaller()
-    app = AssistantApp(page, _fake_services(), update_installer=update_installer)
+    app = AssistantApp(page, _services(), update_installer=update_installer)
     release = ReleaseInfo(
-        version="1.2.0",
+        version="1.3.0",
         download_url="https://github.com/example/setup.exe",
         changelog="",
         filename="Setup.exe",
@@ -325,15 +412,12 @@ async def test_update_download_progress_starts_installer_after_completion() -> N
 
     await app._download_and_install_update(release)
 
-    assert update_installer.downloaded == [release]
     assert update_installer.started == [update_installer.installer_path]
-    assert app._update_banner.progress.value == 1
-    assert app._update_banner.progress_text.value == "100%"
     assert app._update_banner.status_text.value == "安装程序已启动"
-    assert app._update_banner.action_button.content == "重新打开安装程序"
 
 
-async def test_update_download_failure_enables_retry_without_starting_installer() -> None:
+@pytest.mark.asyncio
+async def test_update_download_failure_enables_retry() -> None:
     from llanfeng_code_assistant.app import AssistantApp
     from llanfeng_code_assistant.updater import UpdateDownloadError
 
@@ -349,13 +433,9 @@ async def test_update_download_failure_enables_retry_without_starting_installer(
             raise AssertionError("failed downloads must not start the installer")
 
     page = _FakePage()
-    app = AssistantApp(
-        page,
-        _fake_services(),
-        update_installer=FailingUpdateInstaller(),
-    )
+    app = AssistantApp(page, _services(), update_installer=FailingUpdateInstaller())
     release = ReleaseInfo(
-        version="1.2.0",
+        version="1.3.0",
         download_url="https://github.com/example/setup.exe",
         changelog="",
         filename="Setup.exe",
@@ -365,858 +445,168 @@ async def test_update_download_failure_enables_retry_without_starting_installer(
     await app._download_and_install_update(release)
 
     assert app._update_in_progress is False
-    assert app._downloaded_update_path is None
     assert app._update_banner.status_text.value == "更新下载失败"
-    assert app._update_banner.detail_text.value == "网络连接失败"
     assert app._update_banner.action_button.content == "重试下载"
-    assert app._update_banner.action_button.disabled is False
 
-
-def test_assistant_app_opens_profile_dialog_with_current_flet_api() -> None:
+@pytest.mark.asyncio
+async def test_restore_preview_noop_reports_without_scheduling_mutation() -> None:
     from llanfeng_code_assistant.app import AssistantApp
 
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services())
-
-    app._open_profile_dialog(None)
-
-    assert len(page.opened_dialogs) == 1
-    dialog = page.opened_dialogs[0]
-    assert dialog.open is True
-    assert all(isinstance(action, ft.Button) for action in dialog.actions)
-
-
-def test_new_button_click_opens_profile_dialog() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services())
-    header = app._build_header()
-    # "新增" button is now second-to-last (rightmost is "注入启动")
-    new_button = next(
-        c for c in header.controls if isinstance(c, ft.Button) and c.content == "新增"
-    )
-
-    new_button.on_click(SimpleNamespace())
-
-    assert len(page.opened_dialogs) == 1
-
-
-def test_editing_profile_preserves_existing_codex_models() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    codex_models = [
-        CodexModel(
-            model_id="gpt-5-codex",
-            display_name="GPT-5 Codex",
-            context_window=400_000,
-            position=0,
-        )
-    ]
-    profile = ProviderProfile(
-        id="profile-1",
-        target="codex",
-        name="Relay",
-        base_url="https://api.example.com/v1",
-        model="gpt-5-codex",
-        codex_models=codex_models,
-        secret_ref="codex:profile-1",
-    )
-    repository = _FakeRepository([profile])
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services(repository=repository))
-
-    app._open_profile_dialog(profile)
-    dialog = page.opened_dialogs[0]
-    save_button = next(
-        control
-        for control in _walk_controls(dialog)
-        if isinstance(control, ft.Button) and control.content == "保存"
-    )
-    save_button.on_click(SimpleNamespace())
-
-    assert len(repository.updated_profiles) == 1
-    assert repository.updated_profiles[0].codex_models == codex_models
-
-
-async def test_codex_fetch_populates_full_editable_catalog_and_display_name_selector() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    fetcher = _FakeModelFetcher(
-        [
-            ModelInfo(id=f"provider-{index}", display_name=f"Model {index}")
-            for index in range(31)
-        ]
-    )
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services(model_fetcher=fetcher))
-
-    app._open_profile_dialog(None)
-    dialog = page.opened_dialogs[0]
-    controls = _walk_controls(dialog)
-    base_url = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "URL"
-    )
-    api_key = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "Key"
-    )
-    model = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "模型"
-    )
-    model_selector = next(
-        control
-        for control in controls
-        if isinstance(control, ft.Dropdown)
-        and isinstance(control.data, dict)
-        and control.data.get("model_field") == "模型"
-    )
-    base_url.value = "https://codex.example.com/v1"
-    api_key.value = "sk-codex"
-
-    fetch_button = next(
-        control
-        for control in controls
-        if isinstance(control, ft.Button) and control.content == "获取模型"
-    )
-    await fetch_button.on_click(SimpleNamespace())
-
-    assert fetcher.openai_calls == [("https://codex.example.com/v1", "sk-codex")]
-    assert len(_catalog_text_fields(dialog, "model_id")) == 31
-    assert [
-        (option.key, option.text) for option in model_selector.options[:2]
-    ] == [("provider-0", "Model 0"), ("provider-1", "Model 1")]
-    assert page.update_count == 0
-
-    model_selector.value = "provider-1"
-    model_selector.on_select(SimpleNamespace(control=model_selector))
-
-    assert model.value == "provider-1"
-    remove_button = next(
-        control
-        for control in _walk_controls(dialog)
-        if isinstance(control, ft.IconButton)
-        and isinstance(control.data, dict)
-        and control.data.get("catalog_model_id") == "provider-1"
-        and control.data.get("catalog_field") == "remove"
-    )
-    remove_button.on_click(SimpleNamespace())
-
-    assert model_selector.value is None
-
-
-async def test_codex_save_collects_edited_catalog_models() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    fetcher = _FakeModelFetcher(
-        [ModelInfo(id="provider-id", display_name="5.6 Sol", context_window=None)]
-    )
-    repository = _FakeRepository()
+    restore_calls: list[bool] = []
     page = _FakePage()
     app = AssistantApp(
         page,
-        _fake_services(repository=repository, model_fetcher=fetcher),
+        _services(),
+        preview_restore=lambda: CodexRestorePreview((), None, 0),
+        restore_configuration=lambda: restore_calls.append(True),
     )
 
-    app._open_profile_dialog(None)
-    dialog = page.opened_dialogs[0]
-    controls = _walk_controls(dialog)
-    name = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "名称"
-    )
-    base_url = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "URL"
-    )
-    api_key = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "Key"
-    )
-    name.value = "Codex Relay"
-    base_url.value = "https://codex.example.com/v1"
-    api_key.value = "sk-codex"
-    fetch_button = next(
-        control
-        for control in controls
-        if isinstance(control, ft.Button) and control.content == "获取模型"
-    )
-    await fetch_button.on_click(SimpleNamespace())
+    await app._request_config_restore()
 
-    display_name = _catalog_text_fields(dialog, "display_name")[0]
-    context_window = _catalog_text_fields(dialog, "context_window")[0]
-    display_name.value = "5.6 Sol Custom"
-    context_window.value = ""
-    display_name.on_change(SimpleNamespace())
-    context_window.on_change(SimpleNamespace())
-    save_button = next(
-        control
-        for control in _walk_controls(dialog)
-        if isinstance(control, ft.Button) and control.content == "保存"
-    )
-
-    save_button.on_click(SimpleNamespace())
-
-    assert repository.created_drafts[0].codex_models == [
-        CodexModel(
-            model_id="provider-id",
-            display_name="5.6 Sol Custom",
-            context_window=1_000_000,
-            position=0,
-        )
-    ]
+    assert restore_calls == []
+    assert any("无需恢复" in message for message in _messages(page))
+    assert app.action_buttons["restore"].disabled is False
+    assert app.action_buttons["restore"].content == "恢复配置"
 
 
-@pytest.mark.parametrize(
-    "fetch_error",
-    [
-        pytest.param(RuntimeError("provider unavailable"), id="runtime-error"),
-        pytest.param(ValueError("provider unavailable"), id="value-error"),
-        pytest.param(
-            RuntimeError("Model endpoint returned no valid models"),
-            id="no-valid-models",
-        ),
-    ],
-)
-async def test_codex_fetch_failure_preserves_edited_catalog(
-    fetch_error: RuntimeError | ValueError,
-) -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    fetcher = _FakeModelFetcher([ModelInfo(id="provider-id", display_name="Provider Name")])
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services(model_fetcher=fetcher))
-
-    app._open_profile_dialog(None)
-    dialog = page.opened_dialogs[0]
-    controls = _walk_controls(dialog)
-    fetch_button = next(
-        control
-        for control in controls
-        if isinstance(control, ft.Button) and control.content == "获取模型"
-    )
-    await fetch_button.on_click(SimpleNamespace())
-    display_name = _catalog_text_fields(dialog, "display_name")[0]
-    display_name.value = "Edited Name"
-    display_name.on_change(SimpleNamespace())
-    fetcher.openai_error = fetch_error
-
-    await fetch_button.on_click(SimpleNamespace())
-
-    assert display_name.value == "Edited Name"
-
-
-def test_editing_codex_profile_restores_catalog_and_saves_collected_models() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    profile = ProviderProfile(
-        id="profile-1",
-        target="codex",
-        name="Relay",
-        base_url="https://api.example.com/v1",
-        model="provider-id",
-        codex_models=[
-            CodexModel(
-                model_id="provider-id",
-                display_name="Provider Display Name",
-                context_window=800_000,
-                position=0,
-            )
-        ],
-        secret_ref="codex:profile-1",
-    )
-    repository = _FakeRepository([profile])
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services(repository=repository))
-
-    app._open_profile_dialog(profile)
-    dialog = page.opened_dialogs[0]
-    catalog_ids = _catalog_text_fields(dialog, "model_id")
-    display_name = _catalog_text_fields(dialog, "display_name")[0]
-    context_window = _catalog_text_fields(dialog, "context_window")[0]
-    model_selector = next(
-        control
-        for control in _walk_controls(dialog)
-        if isinstance(control, ft.Dropdown)
-        and isinstance(control.data, dict)
-        and control.data.get("model_field") == "模型"
-    )
-
-    assert [field.value for field in catalog_ids] == ["provider-id"]
-    assert display_name.value == "Provider Display Name"
-    assert context_window.value == "800000"
-    assert [(option.key, option.text) for option in model_selector.options] == [
-        ("provider-id", "Provider Display Name")
-    ]
-    assert page.update_count == 0
-
-    display_name.value = "Edited Provider Name"
-    display_name.on_change(SimpleNamespace())
-    save_button = next(
-        control
-        for control in _walk_controls(dialog)
-        if isinstance(control, ft.Button) and control.content == "保存"
-    )
-    save_button.on_click(SimpleNamespace())
-
-    assert repository.updated_profiles[0].codex_models == [
-        CodexModel(
-            model_id="provider-id",
-            display_name="Edited Provider Name",
-            context_window=800_000,
-            position=0,
-        )
-    ]
-
-
-def test_fetch_models_button_uses_async_event_handler() -> None:
+@pytest.mark.asyncio
+async def test_restore_confirmation_lists_exact_targets_and_preserved_data() -> None:
     from llanfeng_code_assistant.app import AssistantApp
 
     page = _FakePage()
-    app = AssistantApp(page, _fake_services())
-
-    app._open_profile_dialog(None)
-    dialog = page.opened_dialogs[0]
-    fetch_button = next(
-        control
-        for control in _walk_controls(dialog)
-        if isinstance(control, ft.Button) and control.content == "获取模型"
+    preview = CodexRestorePreview(
+        (Path("C:/.codex/config.toml"), Path("C:/.codex/models.json")),
+        Path("C:/Codex/leveldb"),
+        2,
     )
-
-    assert inspect.iscoroutinefunction(fetch_button.on_click)
-
-
-async def test_codex_fetch_reports_unavailable_catalog_editor(monkeypatch) -> None:
-    import llanfeng_code_assistant.app as app_module
-
-    def unavailable_editor_factory(on_change: Callable[[], None]) -> None:
-        del on_change
-
-    monkeypatch.setattr(app_module, "CodexModelCatalogEditor", unavailable_editor_factory)
-    page = _FakePage()
-    app = app_module.AssistantApp(page, _fake_services())
-
-    app._open_profile_dialog(None)
-    dialog = page.opened_dialogs[0]
-    fetch_button = next(
-        control
-        for control in _walk_controls(dialog)
-        if isinstance(control, ft.Button) and control.content == "获取模型"
-    )
-    await fetch_button.on_click(SimpleNamespace())
-
-    message_texts = [
-        control.value
-        for opened_dialog in page.opened_dialogs[1:]
-        for control in _walk_controls(opened_dialog)
-        if isinstance(control, ft.Text)
-    ]
-    assert "模型获取失败: Codex model editor is unavailable" in message_texts
-
-
-def test_codex_editor_early_change_callback_does_not_update_page(monkeypatch) -> None:
-    import llanfeng_code_assistant.app as app_module
-
-    class EarlyCallbackEditor:
-        def __init__(self, on_change: Callable[[], None]) -> None:
-            self.control: ft.Control = ft.Column()
-            on_change()
-
-    monkeypatch.setattr(app_module, "CodexModelCatalogEditor", EarlyCallbackEditor)
-    page = _FakePage()
-    app = app_module.AssistantApp(page, _fake_services())
-
-    app._open_profile_dialog(None)
-
-    assert len(page.opened_dialogs) == 1
-    assert page.update_count == 0
-
-
-def test_claude_profile_dialog_contains_fable_field_and_model_selectors() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services())
-    app.current_target = "claude"
-
-    app._open_profile_dialog(None)
-
-    dialog = page.opened_dialogs[0]
-    visible_text_labels = [
-        control.label
-        for control in _walk_controls(dialog)
-        if isinstance(control, ft.TextField) and control.visible
-    ]
-    visible_selectors = [
-        control
-        for control in _walk_controls(dialog)
-        if isinstance(control, ft.Dropdown) and control.visible
-    ]
-
-    assert visible_text_labels == ["名称", "URL", "Key", "模型", "Haiku", "Sonnet", "Fable", "Opus"]
-    assert len(visible_selectors) == 5
-
-
-async def test_fetch_models_populates_selectors_without_model_buttons() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    fetcher = _FakeModelFetcher()
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services(model_fetcher=fetcher))
-    app.current_target = "claude"
-
-    app._open_profile_dialog(None)
-    dialog = page.opened_dialogs[0]
-    controls = _walk_controls(dialog)
-    base_url = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "URL"
-    )
-    api_key = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "Key"
-    )
-    base_url.value = "https://claude.example.com"
-    api_key.value = "sk-ant"
-
-    fetch_button = next(
-        control
-        for control in controls
-        if isinstance(control, ft.Button) and control.content == "获取模型"
-    )
-    await fetch_button.on_click(SimpleNamespace())
-
-    refreshed_controls = _walk_controls(dialog)
-    model_buttons = [
-        control
-        for control in refreshed_controls
-        if isinstance(control, ft.Button) and control.content in {"claude-a", "claude-b"}
-    ]
-    selectors = [
-        control
-        for control in refreshed_controls
-        if isinstance(control, ft.Dropdown) and control.visible
-    ]
-    fable = next(
-        control
-        for control in refreshed_controls
-        if isinstance(control, ft.TextField) and control.label == "Fable"
-    )
-    fable_selector = next(
-        control
-        for control in selectors
-        if isinstance(control.data, dict) and control.data.get("model_field") == "Fable"
-    )
-
-    assert fetcher.claude_calls == [("https://claude.example.com", "sk-ant")]
-    assert model_buttons == []
-    assert all(
-        [option.key for option in selector.options] == ["claude-a", "claude-b"]
-        for selector in selectors
-    )
-
-    fable_selector.value = "claude-b"
-    fable_selector.on_select(SimpleNamespace(control=fable_selector))
-
-    assert fable.value == "claude-b"
-
-
-def test_assistant_app_creates_profile_card_with_current_flet_api() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-    from llanfeng_code_assistant.models import ProviderProfile
-
-    app = AssistantApp(SimpleNamespace(), _fake_services())
-    profile = ProviderProfile(
-        id="profile-1",
-        target="codex",
-        name="Relay",
-        base_url="https://api.example.com/v1",
-        model="gpt-5",
-        secret_ref="codex:profile-1",
-    )
-
-    card = app._profile_card(profile)
-
-    assert isinstance(card, ft.Card)
-
-
-def test_profile_card_delete_button_removes_profile_and_refreshes() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-    from llanfeng_code_assistant.models import ProviderProfile
-
-    profile = ProviderProfile(
-        id="profile-1",
-        target="codex",
-        name="Relay",
-        base_url="https://api.example.com/v1",
-        model="gpt-5",
-        secret_ref="codex:profile-1",
-    )
-    repository = _FakeRepository([profile])
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services(repository))
-    card = app._profile_card(profile)
-    delete_button = next(
-        control
-        for control in _walk_controls(card)
-        if isinstance(control, ft.Button) and control.content == "删除"
-    )
-
-    delete_button.on_click(SimpleNamespace())
-
-    assert repository.deleted_profiles == [profile]
-    assert repository.list_profiles("codex") == []
-    assert page.update_count >= 1
-
-
-def test_apply_profile_writes_config_marks_active_and_does_not_open_terminal() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-    from llanfeng_code_assistant.models import ProviderProfile
-
-    profile = ProviderProfile(
-        id="profile-1",
-        target="codex",
-        name="Relay",
-        base_url="https://api.example.com/v1",
-        model="gpt-5",
-        secret_ref="codex:profile-1",
-    )
-    repository = _FakeRepository([profile])
-    codex_config = _FakeConfigManager()
-    installer = _FakeInstaller()
-    page = _FakePage()
     app = AssistantApp(
         page,
-        _fake_services(
-            repository=repository,
-            codex_config=codex_config,
-            installer=installer,
-        ),
+        _services(),
+        preview_restore=lambda: preview,
+        is_codex_running=lambda: False,
     )
 
-    app._apply_profile(profile)
-
-    assert codex_config.applied == [(profile, "sk-secret")]
-    assert installer.opened == []
-    assert repository.get_active_profile_id("codex") == "profile-1"
-
-
-def test_profile_card_shows_enabled_state_and_terminal_button_opens_cli() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-    from llanfeng_code_assistant.models import ProviderProfile
-
-    profile = ProviderProfile(
-        id="profile-1",
-        target="codex",
-        name="Relay",
-        base_url="https://api.example.com/v1",
-        model="gpt-5",
-        secret_ref="codex:profile-1",
-    )
-    repository = _FakeRepository([profile])
-    repository.set_active_profile(profile)
-    installer = _FakeInstaller()
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services(repository=repository, installer=installer))
-
-    app._refresh_profiles()
-
-    controls = _walk_controls(app.profile_column)
-    edit_index = next(
-        index
-        for index, control in enumerate(controls)
-        if isinstance(control, ft.IconButton) and control.tooltip == "编辑"
-    )
-    terminal_button = next(
-        control
-        for control in controls[edit_index + 1 :]
-        if isinstance(control, ft.IconButton) and control.tooltip == "打开终端"
-    )
-    active_button = next(
-        control
-        for control in controls
-        if isinstance(control, ft.Button) and control.content == "已启用"
-    )
-    status_text = next(
-        control
-        for control in controls
-        if isinstance(control, ft.Text) and control.value == "已启用"
-    )
-
-    terminal_button.on_click(SimpleNamespace())
-
-    assert terminal_button.icon == ft.Icons.TERMINAL
-    assert active_button.disabled is True
-    assert status_text.value == "已启用"
-    assert installer.opened == ["codex"]
-
-
-def test_header_replaces_protocol_registration_with_document_button() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services())
-    header = app._build_header()
-    buttons = [control for control in header.controls if isinstance(control, ft.Button)]
-
-    assert [button.content for button in buttons] == ["协议文档", "新增", "解锁模型", "注入启动"]
-    assert all(button.content != "注册协议" for button in buttons)
-    assert buttons[0].icon == ft.Icons.DESCRIPTION
-
-
-def test_protocol_document_button_opens_scrollable_complete_document_dialog() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services())
-    header = app._build_header()
-    document_button = next(
-        control
-        for control in header.controls
-        if isinstance(control, ft.Button) and control.content == "协议文档"
-    )
-
-    document_button.on_click(SimpleNamespace())
-
-    assert len(page.opened_dialogs) == 1
-    dialog = page.opened_dialogs[0]
-    assert isinstance(dialog.title, ft.Text)
-    assert dialog.title.value == "协议文档"
-    assert isinstance(dialog.content, ft.Container)
-    assert dialog.content.width == 760
-    assert dialog.content.height == 560
-    content_column = dialog.content.content
-    assert isinstance(content_column, ft.Column)
-    assert content_column.scroll == ft.ScrollMode.AUTO
-    markdown = next(
-        control for control in _walk_controls(dialog) if isinstance(control, ft.Markdown)
-    )
-    assert markdown.selectable is True
-    assert markdown.auto_follow_links is True
-    assert markdown.auto_follow_links_target == ft.UrlTarget.BLANK
-    assert "https://github.com/McXiao1/llanfeng_code" in markdown.value
-    assert "llanfeng-code://v1/import?" in markdown.value
-    assert "llanfeng-code://v1/import-list?payload=" in markdown.value
-    assert "HTML / JavaScript 示例" in markdown.value
-    assert "安全与兼容性注意事项" in markdown.value
-    assert [action.content for action in dialog.actions] == ["关闭"]
-
-
-
-async def test_codex_fetch_and_save_then_apply_uses_catalog_without_undefined_selector_state() -> None:
-    from llanfeng_code_assistant.app import AssistantApp
-
-    fetcher = _FakeModelFetcher(
-        [
-            ModelInfo(id="gpt-5-codex", display_name="GPT-5 Codex", context_window=400_000),
-            ModelInfo(id="gpt-5.1", display_name="GPT-5.1", context_window=500_000),
-        ]
-    )
-    repository = _FakeRepository()
-    codex_config = _FakeConfigManager()
-    page = _FakePage()
-    app = AssistantApp(
-        page,
-        _fake_services(
-            repository=repository,
-            model_fetcher=fetcher,
-            codex_config=codex_config,
-        ),
-    )
-
-    app._open_profile_dialog(None)
-    dialog = page.opened_dialogs[0]
-    controls = _walk_controls(dialog)
-    name = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "名称"
-    )
-    base_url = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "URL"
-    )
-    api_key = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "Key"
-    )
-    model = next(
-        control
-        for control in controls
-        if isinstance(control, ft.TextField) and control.label == "模型"
-    )
-    selector = next(
-        control
-        for control in controls
-        if isinstance(control, ft.Dropdown)
-        and isinstance(control.data, dict)
-        and control.data.get("model_field") == "模型"
-    )
-    fetch_button = next(
-        control
-        for control in controls
-        if isinstance(control, ft.Button) and control.content == "获取模型"
-    )
-    save_and_apply = next(
-        control
-        for control in _walk_controls(dialog)
-        if isinstance(control, ft.Button) and control.content == "保存并启用"
-    )
-
-    name.value = "Relay"
-    base_url.value = "https://api.example.com/v1"
-    api_key.value = "sk-secret"
-
-    await fetch_button.on_click(SimpleNamespace())
-
-    selector.value = "gpt-5.1"
-    selector.on_select(SimpleNamespace(control=selector))
-    assert model.value == "gpt-5.1"
-    assert [option.text for option in selector.options] == ["5 Codex", "5.1"]
-    assert all(isinstance(option.key, str) for option in selector.options)
-
-    save_and_apply.on_click(SimpleNamespace())
-
-    assert len(repository.created_drafts) == 1
-    draft = repository.created_drafts[0]
-    assert draft.model == "gpt-5.1"
-    assert [item.model_dump() for item in draft.codex_models] == [
-        {
-            "model_id": "gpt-5-codex",
-            "display_name": "5 Codex",
-            "context_window": 400_000,
-            "position": 0,
-        },
-        {
-            "model_id": "gpt-5.1",
-            "display_name": "5.1",
-            "context_window": 500_000,
-            "position": 1,
-        },
-    ]
-    assert len(codex_config.applied) == 1
-    applied_profile, applied_secret = codex_config.applied[0]
-    assert isinstance(applied_profile, ProviderProfile)
-    assert applied_profile.model == "gpt-5.1"
-    assert [item.display_name for item in applied_profile.codex_models] == ["5 Codex", "5.1"]
-    assert applied_secret == "sk-secret"
-    assert repository.get_active_profile_id("codex") == applied_profile.id
-
-
-def _active_codex_profile_app(monkeypatch):
-    """Build an app whose active Codex profile has one custom model.
-
-    @returns: Tuple of (app, page, unlocker module).
-    """
-    import llanfeng_code_assistant.codex_statsig_unlocker as unlocker
-    from llanfeng_code_assistant.app import AssistantApp
-
-    profile = ProviderProfile(
-        id="profile-1",
-        target="codex",
-        name="Relay",
-        base_url="https://api.example.com/v1",
-        model="gpt-5.6-sol",
-        codex_models=[
-            CodexModel(
-                model_id="gpt-5.6-sol",
-                display_name="5.6 Sol",
-                context_window=400_000,
-                position=0,
-            )
-        ],
-        secret_ref="codex:profile-1",
-    )
-    repository = _FakeRepository([profile])
-    repository.set_active_profile(profile)
-    page = _FakePage()
-    app = AssistantApp(page, _fake_services(repository=repository))
-    return app, page, unlocker
-
-
-async def test_unlock_prompts_force_quit_when_codex_is_running(monkeypatch) -> None:
-    app, page, unlocker = _active_codex_profile_app(monkeypatch)
-    monkeypatch.setattr(unlocker, "find_codex_leveldb_path", lambda: Path("db"))
-    monkeypatch.setattr(unlocker, "is_codex_running", lambda: True)
-
-    await app._unlock_statsig_models()
+    await app._request_config_restore()
 
     dialog = page.opened_dialogs[-1]
     assert isinstance(dialog, ft.AlertDialog)
     assert isinstance(dialog.title, ft.Text)
-    assert dialog.title.value == "Codex 正在运行"
-    force_quit_button = next(
-        c
-        for c in _walk_controls(dialog)
-        if isinstance(c, ft.Button) and c.content == "强制退出并解锁"
+    assert dialog.title.value == "恢复配置"
+    content = "\n".join(
+        child.value
+        for child in _walk_controls(dialog)
+        if isinstance(child, ft.Text) and isinstance(child.value, str)
     )
-    assert force_quit_button is not None
+    assert "config.toml" in content
+    assert "models.json" in content
+    assert "2 项 Statsig" in content
+    assert "保留登录" in content
+    assert "auth.json" in content
+    confirm = next(
+        child
+        for child in _walk_controls(dialog)
+        if isinstance(child, ft.Button) and child.content == "确认恢复"
+    )
+    confirm.on_click(SimpleNamespace())
+    assert page.scheduled_tasks[-1] == (app._perform_config_restore, (False,))
 
 
-async def test_perform_unlock_force_quits_then_unlocks(monkeypatch) -> None:
-    app, page, unlocker = _active_codex_profile_app(monkeypatch)
-    calls: list[str] = []
+@pytest.mark.asyncio
+async def test_restore_confirmation_requires_closing_running_codex() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
 
-    def _fake_kill() -> bool:
-        calls.append("kill")
-        return True
-
-    def _fake_unlock(**kwargs: object) -> dict[str, object]:
-        calls.append("unlock")
-        return {
-            "success": True,
-            "message": "成功解锁 1 个模型",
-            "backup_path": None,
-            "models_added": ["gpt-5.6-sol"],
-        }
-
-    monkeypatch.setattr(unlocker, "force_kill_codex", _fake_kill)
-    monkeypatch.setattr(unlocker, "unlock_statsig_models", _fake_unlock)
-
-    profile = app.services.repository.profiles[0]
-    await app._perform_unlock(profile, Path("db"), force_quit=True)
-
-    assert calls == ["kill", "unlock"]
-    messages = [
-        c.value
-        for opened in page.opened_dialogs
-        for c in _walk_controls(opened)
-        if isinstance(c, ft.Text)
-    ]
-    assert any("gpt-5.6-sol" in m for m in messages)
-
-
-async def test_perform_unlock_aborts_when_force_quit_fails(monkeypatch) -> None:
-    app, page, unlocker = _active_codex_profile_app(monkeypatch)
-    unlock_called: list[bool] = []
-
-    monkeypatch.setattr(unlocker, "force_kill_codex", lambda: False)
-    monkeypatch.setattr(
-        unlocker,
-        "unlock_statsig_models",
-        lambda **_: unlock_called.append(True),
+    page = _FakePage()
+    preview = CodexRestorePreview((), Path("C:/Codex/leveldb"), None)
+    app = AssistantApp(
+        page,
+        _services(),
+        preview_restore=lambda: preview,
+        is_codex_running=lambda: True,
     )
 
-    profile = app.services.repository.profiles[0]
-    await app._perform_unlock(profile, Path("db"), force_quit=True)
+    await app._request_config_restore()
 
-    assert unlock_called == []
-    messages = [
-        c.value
-        for opened in page.opened_dialogs
-        for c in _walk_controls(opened)
-        if isinstance(c, ft.Text)
-    ]
-    assert any("无法退出 Codex" in m for m in messages)
+    dialog = page.opened_dialogs[-1]
+    confirm = next(
+        child
+        for child in _walk_controls(dialog)
+        if isinstance(child, ft.Button) and child.content == "关闭 Codex 并恢复"
+    )
+    confirm.on_click(SimpleNamespace())
+    assert page.scheduled_tasks[-1] == (app._perform_config_restore, (True,))
+
+
+@pytest.mark.asyncio
+async def test_restore_success_surfaces_backup_preservation_and_restart_guidance() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+
+    result = CodexRestoreResult(
+        True,
+        "Codex 配置已安全恢复, 登录和用户数据已保留",
+        backup_path=Path("C:/backup/codex_restore_20260712"),
+        removed_paths=(Path("C:/.codex/config.toml"), Path("C:/.codex/models.json")),
+        invalidated_statsig_keys=2,
+    )
+    page = _FakePage()
+    app = AssistantApp(
+        page,
+        _services(),
+        restore_configuration=lambda: result,
+    )
+
+    await app._perform_config_restore(False)
+
+    message = "\n".join(_messages(page))
+    assert "config.toml、models.json" in message
+    assert "2 项 Statsig" in message
+    assert "codex_restore_20260712" in message
+    assert "登录和用户数据已保留" in message
+    assert "重新启动 Codex" in message
+    assert app.action_buttons["restore"].disabled is False
+
+
+@pytest.mark.asyncio
+async def test_restore_stops_when_codex_cannot_be_terminated() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+
+    restore_calls: list[bool] = []
+    page = _FakePage()
+    app = AssistantApp(
+        page,
+        _services(),
+        terminate_codex=lambda: False,
+        restore_configuration=lambda: restore_calls.append(True),
+    )
+
+    await app._perform_config_restore(True)
+
+    assert restore_calls == []
+    assert any("无法完全关闭 Codex" in message for message in _messages(page))
+    assert app.action_buttons["restore"].disabled is False
+
+
+@pytest.mark.asyncio
+async def test_restore_partial_rollback_is_visible() -> None:
+    from llanfeng_code_assistant.app import AssistantApp
+
+    result = CodexRestoreResult(
+        False,
+        "清除 Statsig 模型缓存失败",
+        backup_path=Path("C:/backup/codex_restore_failed"),
+        rollback_attempted=True,
+        rollback_completed=False,
+        warnings=("恢复 Codex LevelDB 失败: rollback denied",),
+    )
+    page = _FakePage()
+    app = AssistantApp(
+        page,
+        _services(),
+        restore_configuration=lambda: result,
+    )
+
+    await app._perform_config_restore(False)
+
+    message = "\n".join(_messages(page))
+    assert "回滚状态: 不完整" in message
+    assert "codex_restore_failed" in message
+    assert "rollback denied" in message

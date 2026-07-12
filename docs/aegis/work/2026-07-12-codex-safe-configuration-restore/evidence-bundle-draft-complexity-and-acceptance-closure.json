@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "complexity-and-acceptance-closure",
+  "type": "audit",
+  "source": "physical-line comparison against HEAD; owner scan; specification section 17 acceptance audit",
+  "summary": "All 11 specification acceptance criteria have direct test/build/document evidence. Current maintained Python source/tests are 27 files and 6,630 lines versus 39 files and 9,549 lines at HEAD, a net reduction of 2,919 lines. Largest files are app.py 769 and codex_statsig_unlocker.py 768; no maintained file exceeds 800 or the project 2,000-line limit, and no filesystem logic entered app.py, transaction logic entered the Statsig owner, second LevelDB writer, or legacy reset fallback.",
+  "verifier": "main-agent"
+}

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "architecture-and-baseline-sync",
+  "type": "architecture-record",
+  "source": "ADR creation gate; helper-backed supersede-adr; new current baseline; aegis-workspace check",
+  "summary": "ADR-0002 supersedes only ADR-0001 current-state assertions while preserving ADR-0001 as history; the new baseline records five actions, the restorer/Statsig owner split, exact mutable targets, auth preservation, rollback, packaging, complexity, and retirement boundaries. Workspace structure check passed.",
+  "verifier": "main-agent"
+}

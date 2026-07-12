@@ -1,10 +1,11 @@
+"""Install Codex and Claude CLI packages plus their external prerequisites."""
 from __future__ import annotations
 
 import json
 import os
 import platform
+import shutil
 import subprocess
-import time
 import urllib.request
 from dataclasses import dataclass
 from enum import StrEnum
@@ -21,15 +22,6 @@ from .constants import (
 from .environment import SystemStatus
 from .paths import downloads_dir
 
-CODEX_PLUS_PLUS_WINDOWS_PATH = (
-    Path.home()
-    / "AppData"
-    / "Local"
-    / "Programs"
-    / "Codex++"
-    / "codex-plus-plus.exe"
-)
-
 
 class InstallTarget(StrEnum):
     """Supported npm-installed CLI targets."""
@@ -40,7 +32,11 @@ class InstallTarget(StrEnum):
 
 @dataclass(frozen=True)
 class DownloadSpec:
-    """Installer download metadata."""
+    """External installer download metadata.
+
+    @param url: Direct HTTPS download URL.
+    @param filename: Destination filename.
+    """
 
     url: str
     filename: str
@@ -50,7 +46,8 @@ def build_npm_install_command(target: InstallTarget) -> list[str]:
     """Build a pinned global npm install command.
 
     @param target: CLI target.
-    @returns: Command argv.
+    @returns: Command argument vector.
+    @throws ValueError: If the target is unsupported.
     """
 
     if target == InstallTarget.CODEX:
@@ -63,7 +60,7 @@ def build_npm_install_command(target: InstallTarget) -> list[str]:
 def npm_set_registry_command() -> list[str]:
     """Return the npm registry setup command.
 
-    @returns: Command argv.
+    @returns: Command argument vector.
     """
 
     return ["npm", "config", "set", "registry", NPM_MIRROR_REGISTRY]
@@ -80,20 +77,19 @@ def node_arch() -> str:
 
 
 def latest_node_lts_spec(minimum_major: int = 22) -> DownloadSpec:
-    """Resolve the latest Node LTS MSI download spec.
+    """Resolve the latest compatible Node LTS MSI.
 
     @param minimum_major: Minimum acceptable major version.
     @returns: Download specification.
-    @throws RuntimeError: If no suitable version is found.
+    @throws RuntimeError: If no suitable LTS release is available.
     """
 
     with urllib.request.urlopen("https://nodejs.org/dist/index.json", timeout=20) as response:
         versions: list[dict[str, Any]] = json.loads(response.read().decode("utf-8"))
     for item in versions:
         version = str(item.get("version", "")).lstrip("v")
-        is_lts = bool(item.get("lts"))
         major = int(version.split(".", 1)[0]) if version[:1].isdigit() else 0
-        if is_lts and major >= minimum_major:
+        if bool(item.get("lts")) and major >= minimum_major:
             filename = f"node-v{version}-win-{node_arch()}.msi"
             return DownloadSpec(
                 url=f"https://nodejs.org/dist/v{version}/{filename}",
@@ -103,10 +99,10 @@ def latest_node_lts_spec(minimum_major: int = 22) -> DownloadSpec:
 
 
 def latest_git_for_windows_spec() -> DownloadSpec:
-    """Resolve the latest Git for Windows installer from GitHub releases.
+    """Resolve the latest Git for Windows 64-bit installer.
 
     @returns: Download specification.
-    @throws RuntimeError: If no suitable asset is found.
+    @throws RuntimeError: If release metadata has no matching asset.
     """
 
     request = urllib.request.Request(
@@ -119,6 +115,8 @@ def latest_git_for_windows_spec() -> DownloadSpec:
     if not isinstance(assets, list):
         raise RuntimeError("Git release assets missing")
     for asset in assets:
+        if not isinstance(asset, dict):
+            continue
         name = str(asset.get("name", ""))
         url = str(asset.get("browser_download_url", ""))
         if name.endswith("64-bit.exe") and url:
@@ -127,16 +125,16 @@ def latest_git_for_windows_spec() -> DownloadSpec:
 
 
 class InstallerService:
-    """Coordinate installer downloads and CLI installation commands."""
+    """Coordinate prerequisite downloads and pinned CLI installation."""
 
     def __init__(self, download_dir: Path | None = None) -> None:
         self._download_dir = download_dir or downloads_dir()
 
     def download(self, spec: DownloadSpec) -> Path:
-        """Download an installer to the app download directory.
+        """Download one external installer.
 
         @param spec: Download metadata.
-        @returns: Local path.
+        @returns: Local installer path.
         """
 
         self._download_dir.mkdir(parents=True, exist_ok=True)
@@ -145,9 +143,10 @@ class InstallerService:
         return destination
 
     def open_installer(self, path: Path) -> None:
-        """Open a local installer file.
+        """Open a downloaded installer.
 
-        @param path: Installer path.
+        @param path: Local installer path.
+        @returns: None.
         """
 
         if os.name == "nt":
@@ -155,85 +154,49 @@ class InstallerService:
             return
         subprocess.Popen([str(path)])
 
-    def ensure_npm_registry(self) -> subprocess.CompletedProcess[str]:
-        """Set npm registry to the default mirror.
+    def _run_npm_command(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        """Run an npm command through its resolved executable or Windows shim path."""
 
-        @returns: Completed process.
-        """
-
+        npm_executable = shutil.which("npm")
+        if not npm_executable:
+            raise FileNotFoundError(
+                "未在 PATH 中找到 npm; 请安装 Node.js, 安装完成后重启本应用。"
+            )
         return subprocess.run(
-            npm_set_registry_command(),
+            [npm_executable, *command[1:]],
             capture_output=True,
             text=True,
             check=False,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
+
+    def ensure_npm_registry(self) -> subprocess.CompletedProcess[str]:
+        """Configure the project npm mirror.
+
+        @returns: Completed command result.
+        """
+
+        return self._run_npm_command(npm_set_registry_command())
 
     def install_cli(self, target: InstallTarget) -> subprocess.CompletedProcess[str]:
-        """Install a managed CLI via npm.
+        """Install or update one managed CLI.
 
         @param target: CLI target.
-        @returns: Completed process.
+        @returns: Completed command result.
         """
 
-        return subprocess.run(
-            build_npm_install_command(target),
-            capture_output=True,
-            text=True,
-            check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-        )
-
-    def launch_and_close(self, command: str, delay_seconds: float = 2.0) -> None:
-        """Launch a CLI briefly so it can initialize user files.
-
-        @param command: Command name.
-        @param delay_seconds: Delay before termination.
-        """
-
-        creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-        process = subprocess.Popen([command], creationflags=creation_flags)
-        time.sleep(delay_seconds)
-        if process.poll() is None:
-            process.terminate()
-
-    def resolve_cli_command(self, command: str) -> list[str]:
-        """Resolve the preferred executable command for an interactive CLI target.
-
-        @param command: CLI target name.
-        @returns: Process argv used to launch the target interactively.
-        """
-
-        if (
-            os.name == "nt"
-            and command == InstallTarget.CODEX.value
-            and CODEX_PLUS_PLUS_WINDOWS_PATH.exists()
-        ):
-            return [str(CODEX_PLUS_PLUS_WINDOWS_PATH)]
-        return [command]
-
-    def open_cli(self, command: str) -> None:
-        """Open a CLI or compatible launcher for user interaction.
-
-        @param command: Command name.
-        """
-
-        resolved = self.resolve_cli_command(command)
-        if os.name == "nt":
-            subprocess.Popen(["cmd", "/c", "start", *resolved])
-        else:
-            subprocess.Popen(resolved)
+        return self._run_npm_command(build_npm_install_command(target))
 
     def required_external_installers(
         self,
         status: SystemStatus,
         target: InstallTarget,
     ) -> list[str]:
-        """List external installers needed before npm installation.
+        """List prerequisite installers required before npm installation.
 
-        @param status: Current system status.
-        @param target: CLI target.
-        @returns: Installer names.
+        @param status: Current environment status.
+        @param target: Requested CLI target.
+        @returns: Ordered prerequisite identifiers.
         """
 
         needed: list[str] = []

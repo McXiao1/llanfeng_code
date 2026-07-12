@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "clean-flet-app-archive",
+  "type": "artifact-audit",
+  "source": "build/windows/data/flutter_assets/app/app.zip",
+  "summary": "Final app.zip has 16 entries and only assets/main.py/src roots; required runtime owners are present; retired modules, old VBS, development roots, pyc, __pycache__, and egg-info have zero hits. Size 40,427 bytes; SHA-256 32ADE74C6814A6CE12C0E0BEEBC58286CCDF411271833756060D5F628AA3A781.",
+  "verifier": "main-agent"
+}

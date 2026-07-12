@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-12-codex-safe-configuration-restore",
+  "taskIntentRef": "docs/aegis/work/2026-07-12-codex-safe-configuration-restore/task-intent-draft.json",
+  "baselineRefs": [
+    "docs/aegis/baseline/2026-07-12-safe-restore-baseline.md"
+  ],
+  "scopeStatus": "All implementation, packaging, architecture, and evidence work remains inside approved safe scope A and exact mutable targets.",
+  "compatStatus": "Five actions are verified; prior install/update, unlock, marketplace, update, environment, and single-instance contracts remain green.",
+  "retirementStatus": "Provider/config/profile/protocol owners, whole-LevelDB reset, auth deletion, second writer, and compatibility fallbacks remain absent from runtime and app.zip.",
+  "newRiskSignals": [
+    "Only manual live-host validation and installer signing remain outside the automated completion boundary."
+  ],
+  "decision": "continue"
+}

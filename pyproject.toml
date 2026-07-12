@@ -5,15 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "llanfeng-code-assistant"
 version = "1.2.0"
-description = "Windows desktop helper for Codex and Claude configuration."
+description = "Windows desktop helper for Codex and Claude installation and Codex enhancements."
 requires-python = ">=3.12"
 dependencies = [
     "certifi==2026.2.25",
     "flet==0.85.3",
     "httpx==0.28.1",
-    "tomlkit==0.15.0",
-    "pydantic==2.13.4",
-    "keyring==25.7.0",
     "websockets==16.0",
     "chromium-reader==0.1.1",
 ]
@@ -34,6 +31,32 @@ module = "main.py"
 # websockets uses lazy imports internally and must be named here so Flet's
 # build tool bundles it even when the top-level import is deferred.
 packages = ["websockets", "chromium_reader"]
+exclude = [
+    ".agents",
+    ".claude",
+    ".codex",
+    ".git",
+    ".github",
+    ".gitignore",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "Codex.md",
+    "LOGO.png",
+    "PRODUCT.md",
+    "README.md",
+    "docs",
+    "pyproject.toml",
+    "scripts",
+    "tests",
+    "venv",
+]
+
+[tool.flet.cleanup]
+app = true
+app_files = ["**.egg-info", "**.pyc"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

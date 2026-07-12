@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-11-install-and-codex-enhancements-refactor",
+  "taskIntentRef": "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/task-intent-draft.json",
+  "baselineRefs": [
+    "docs/aegis/baseline/2026-07-11-post-refactor-baseline.md"
+  ],
+  "scopeStatus": "The repair remains inside the retained Codex/Claude installation and environment-detection boundary.",
+  "compatStatus": "shell=False is preserved; commands use the resolved executable or Windows .CMD shim without adding a UI fallback or duplicate owner.",
+  "retirementStatus": "No retired configuration, protocol, profile, or CodexPlusPlus fallback path was restored; app.zip contains zero forbidden retired entries.",
+  "newRiskSignals": [
+    "The user numbered a second issue but supplied no error details, so it remains outside the verified repair scope."
+  ],
+  "decision": "continue"
+}

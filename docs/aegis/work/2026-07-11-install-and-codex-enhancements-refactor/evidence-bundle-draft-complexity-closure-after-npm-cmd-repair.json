@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "complexity-closure-after-npm-cmd-repair",
+  "type": "repository-audit",
+  "source": "current src/tests physical-line scan versus git HEAD",
+  "summary": "Current src/tests contain 25 Python files and 5,305 physical lines versus 39 files and 9,549 lines at HEAD, a net reduction of 4,244 lines. The repair keeps installer.py at 207 lines and environment.py at 156 lines, adds no fallback owner, and every maintained Python file remains below 2,000 lines.",
+  "verifier": "main-agent"
+}

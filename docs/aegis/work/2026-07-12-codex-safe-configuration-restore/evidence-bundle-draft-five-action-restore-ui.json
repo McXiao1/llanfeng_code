@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "five-action-restore-ui",
+  "type": "test-output",
+  "source": "python -m pytest -q tests/test_entrypoint_and_ui.py; focused Ruff",
+  "summary": "Five-action Flet UI passed 19 tests: restore no-op, exact target/preserved-data confirmation, running-Codex close confirmation, success backup/restart guidance, termination failure, partial rollback visibility, existing install/unlock/launch/update behavior, and absence of retired UI; Ruff is clean.",
+  "verifier": "main-agent"
+}

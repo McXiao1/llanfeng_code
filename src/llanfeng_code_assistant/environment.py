@@ -129,7 +129,7 @@ class ToolDetector:
             return ToolStatus(name=name, path=None, version=None)
         try:
             completed = subprocess.run(
-                [name, *version_args],
+                [path, *version_args],
                 capture_output=True,
                 check=False,
                 text=True,

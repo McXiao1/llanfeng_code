@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-12-codex-safe-configuration-restore",
+  "currentTodo": "Report evidence-supported completion and await user direction.",
+  "completedTodos": [
+    "Task 1 exact Statsig invalidation completed.",
+    "Task 2 reversible restore transaction completed.",
+    "Task 3 five-action Flet UI completed.",
+    "Task 4 packaging and current product documentation completed.",
+    "ADR-0002 and current safe-restore baseline completed.",
+    "Full and critical Python verification completed.",
+    "Fresh Windows app/archive and installer builds completed.",
+    "Acceptance, complexity, reflection, proof-bundle, and workspace checks completed."
+  ],
+  "activeSlice": "No implementation work remains; prepare the verification-before-completion receipt without staging or committing.",
+  "evidenceRefs": [
+    "statsig-exact-cache-invalidation",
+    "reversible-config-restore-transaction",
+    "five-action-restore-ui",
+    "packaging-and-product-contract",
+    "architecture-and-baseline-sync",
+    "full-python-and-retirement-verification",
+    "fresh-windows-app-and-archive",
+    "fresh-windows-installer",
+    "final-fresh-verification",
+    "complexity-and-acceptance-closure"
+  ],
+  "blockedOn": null,
+  "nextStep": "Await user direction for optional commit/staging, interactive installer walkthrough, or live Codex validation.",
+  "updatedAt": "2026-07-12"
+}

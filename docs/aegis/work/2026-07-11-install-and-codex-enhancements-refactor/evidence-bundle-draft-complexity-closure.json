@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "complexity-closure",
+  "type": "repository-audit",
+  "source": "HEAD/current Python line-count comparison and maintained-file limit scan",
+  "summary": "Current src/tests contain 25 Python files and 5,243 physical lines versus 39 files and 9,549 lines at HEAD: 19 legacy Python files deleted, 5 focused source/test files added, net -4,306 lines. Every maintained Python file is below 2,000 lines.",
+  "verifier": "main-agent"
+}

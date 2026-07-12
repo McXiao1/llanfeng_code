@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "final-windows-installer",
+  "type": "build-output",
+  "source": "scripts/build_windows.ps1; scripts/build_installer.ps1 -SkipAppBuild",
+  "summary": "Flet Windows build and Inno Setup 6.7.3 compile succeeded. Installer is 28,764,892 bytes with SHA-256 2D3833CBB940724424592E9D4BD445E675C6C927F569D163126967E5E6AA3DC2.",
+  "verifier": "main-agent"
+}

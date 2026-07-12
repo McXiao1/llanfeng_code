@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "candidateDocs": [
+    "docs/aegis/specs/2026-07-12-codex-safe-configuration-restore-design.md",
+    "docs/aegis/plans/2026-07-12-codex-safe-configuration-restore.md",
+    "docs/aegis/baseline/2026-07-11-post-refactor-baseline.md",
+    "docs/aegis/adr/ADR-0001-codex-owned-install-and-enhancement-boundaries.md"
+  ],
+  "whyRelevant": "已批准规格、执行计划、当前产品边界和现有 owner 决策共同定义恢复目标与非目标。",
+  "missingAuthority": []
+}

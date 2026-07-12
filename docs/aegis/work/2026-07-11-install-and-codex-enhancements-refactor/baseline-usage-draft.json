@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-11-install-and-codex-enhancements-refactor",
+  "requiredBaselineRefs": [
+    "README.md",
+    "Codex.md",
+    "pyproject.toml",
+    "scripts/installer.iss",
+    "build/reference/renderer-inject.js"
+  ],
+  "deliveredContextRefs": [],
+  "acknowledgedBeforePlanRefs": [
+    "README.md",
+    "Codex.md",
+    "pyproject.toml",
+    "scripts/installer.iss",
+    "build/reference/renderer-inject.js"
+  ],
+  "citedInPlanRefs": [
+    "docs/aegis/specs/2026-07-11-install-and-codex-enhancements-design.md"
+  ],
+  "missingRefs": [],
+  "decision": "pause-for-user"
+}

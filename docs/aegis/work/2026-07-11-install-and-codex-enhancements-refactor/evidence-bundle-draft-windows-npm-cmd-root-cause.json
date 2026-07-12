@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "windows-npm-cmd-root-cause",
+  "type": "diagnostic-output",
+  "source": "shutil.which + subprocess reproduction on Windows",
+  "summary": "On this host shutil.which(\"npm\") resolves E:\\nodejs\\npm.CMD; subprocess.run([\"npm\", \"--version\"]) raises FileNotFoundError WinError 2 while subprocess.run([resolved_path, \"--version\"]) succeeds with npm 11.12.1. Root cause is executing the bare npm name instead of the resolved Windows command shim.",
+  "verifier": "main-agent"
+}

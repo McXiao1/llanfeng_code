@@ -1,466 +1,96 @@
-"""CDP-based ChatGPT Desktop (Codex) launcher and script injector.
-
-OpenAI's ChatGPT Desktop (package name ``OpenAI.Codex``) is distributed
-through the Microsoft Store and is an **Electron** application.  Electron
-apps expose Chrome DevTools Protocol via ``--remote-debugging-port``.
-
-Injection approach reverse-engineered from the CodexPlusPlus open-source
-project (https://github.com/BigPizzaV3/CodexPlusPlus), specifically
-``assets/inject/renderer-inject.js``.
-
-Key mechanisms:
-1. **Statsig in-memory patch** — patches ``window.__STATSIG__`` clients'
-   ``getDynamicConfig("107580212")`` to add custom models to
-   ``available_models`` (the account whitelist).
-2. **Response.prototype.json patch** — intercepts every JSON response and
-   injects custom model descriptors into model arrays / sets.
-3. **dispatchEvent patch** — intercepts MCP ``model/list`` requests to
-   include hidden models.
-4. **Plugin unlock** — patches ``Array.prototype.filter`` using source-only
-   detection (never calls the original callback during detection) to bypass
-   build-flavor and marketplace-hidden filters; also patches
-   ``window.electronBridge.sendMessageFromView``.
-5. **Fast startup optimization** — applies timeout to Statsig requests to
-   prevent long initialization delays on first launch.
-
-Important: All patches work via runtime memory injection only. Configuration
-files (config.toml, models.json) are only written when missing or when the
-user explicitly changes settings in the main app. This preserves user's
-in-app customizations (model selection, plugin installations) across launches.
-"""
+"""Launch Microsoft Store Codex Desktop and inject a verified CDP script."""
 from __future__ import annotations
 
 import asyncio
 import json
+import os
+import socket
 import subprocess
 import time
 import urllib.request
-from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
-# websockets is imported lazily inside inject_scripts() so that the module
-# loads cleanly even when the package is absent (e.g. a stale build without
-# websockets bundled).  The button will always be visible; only the actual
-# injection step fails if websockets is missing at runtime.
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-CDP_DEFAULT_PORT: int = 9222
-CDP_WAIT_TIMEOUT: float = 15.0  # Reduced from 30s to 15s for faster startup
-CDP_WAIT_INTERVAL: float = 0.3  # Reduced from 0.5s to 0.3s for more responsive polling
-
-STORE_PACKAGE_NAME: str = "OpenAI.Codex"
-STORE_EXE_RELPATH: str = r"app\ChatGPT.exe"
-STORE_EXE_RELPATH_ALT: str = r"app\Codex.exe"
-
-_NPM_WIN32_X64_RELPATH = (
-    "@openai/codex/node_modules/@openai/codex-win32-x64"
-    "/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
-)
-_NPM_WIN32_ARM64_RELPATH = (
-    "@openai/codex/node_modules/@openai/codex-win32-arm64"
-    "/vendor/aarch64-pc-windows-msvc/bin/codex.exe"
-)
-
-# ---------------------------------------------------------------------------
-# Script factories
-# ---------------------------------------------------------------------------
+CDP_WAIT_TIMEOUT = 15.0
+CDP_WAIT_INTERVAL = 0.3
+STORE_PACKAGE_NAME = "OpenAI.Codex"
+STORE_EXECUTABLE_PATHS = (Path("app/ChatGPT.exe"), Path("app/Codex.exe"))
 
 
-def _build_config_script(
-    model_names: Sequence[str],
-    default_model: str,
-    provider_name: str,
-) -> str:
-    """Return JS that sets window.__LF_CATALOG__ with embedded model data."""
-    data = {
-        "models": list(model_names),
-        "defaultModel": default_model,
-        "providerName": provider_name or "Custom model",
-    }
-    return f"window.__LF_CATALOG__ = {json.dumps(data, ensure_ascii=False)};"
+class CodexDesktopError(RuntimeError):
+    """Raised when Codex Desktop cannot be safely enhanced."""
 
 
-# ---------------------------------------------------------------------------
-# Static injection scripts
-# ---------------------------------------------------------------------------
+class CdpSocket(Protocol):
+    """Minimal WebSocket protocol required by CDP command delivery."""
 
-_GUARD = "(function(){var G='__lf_{tag}__';if(window[G])return;window[G]=true;"
-_END = "})();"
+    async def send(self, message: str) -> None:
+        """Send one text frame."""
 
-
-def _wrap(tag: str, body: str) -> str:
-    return _GUARD.replace("{tag}", tag) + body + _END
+    async def recv(self) -> str | bytes:
+        """Receive one CDP response frame."""
 
 
-# ---------------------------------------------------------------------------
-# Script 1 — Statsig fast-startup timeout
-# ---------------------------------------------------------------------------
-FAST_STARTUP_SCRIPT: str = _wrap("fast_startup", r"""
-  var TIMEOUT_MS = 300;  // Reduced from 800ms to 300ms for faster startup
-  var STATSIG_HOSTS = new Set([
-    'ab.chatgpt.com','featureassets.org','prodregistryv2.org',
-    'api.statsigcdn.com','statsigapi.net','cloudflare-dns.com'
-  ]);
-  function isStatsig(input) {
-    try {
-      var u = new URL(typeof input==='string'?input:(input&&input.url)||'', location.href);
-      return STATSIG_HOSTS.has(u.hostname);
-    } catch { return false; }
-  }
-  function mkTimeoutSignal(orig) {
-    var ctrl = new AbortController();
-    var t = setTimeout(function(){ ctrl.abort(); }, TIMEOUT_MS);
-    if (orig) {
-      if (orig.aborted) ctrl.abort();
-      else orig.addEventListener('abort', function(){ ctrl.abort(); }, {once:true});
-    }
-    return { signal: ctrl.signal, clear: function(){ clearTimeout(t); } };
-  }
-  if (!window.fetch.__lf_fast_patched) {
-    var _origFetch = window.fetch.bind(window);
-    var _pf = function(input, init) {
-      if (!isStatsig(input)) return _origFetch(input, init);
-      var ts = mkTimeoutSignal(init&&init.signal);
-      return _origFetch(input, Object.assign({}, init||{}, {signal:ts.signal})).finally(ts.clear);
-    };
-    _pf.__lf_fast_patched = true;
-    window.fetch = _pf;
-  }
-""")
+@dataclass(frozen=True)
+class CdpTarget:
+    """Chrome DevTools Protocol target metadata.
 
-# ---------------------------------------------------------------------------
-# Script 2 — Plugin marketplace unlock
-#
-# SAFETY FIX: detect plugin arrays by SOURCE + STRUCTURE only.
-# Previous version called !cb(p) which executed the original callback during
-# detection — this caused React render crashes because Array.prototype.filter
-# is called during rendering and the callbacks can throw or mutate state.
-# ---------------------------------------------------------------------------
-PLUGIN_UNLOCK_SCRIPT: str = _wrap("plugin_unlock", r"""
-  var OFFICIAL = new Set([
-    'openai-bundled','openai-curated','openai-primary-runtime',
-    'openai-api-curated','openai-curated-remote'
-  ]);
-  function restoreName(n) {
-    if (n==='codex-plus-openai-curated') return 'openai-curated';
-    if (n==='codex-plus-openai-curated-remote') return 'openai-curated-remote';
-    return n;
-  }
-  function isOfficial(n) { return OFFICIAL.has(restoreName(String(n||''))); }
-  function fnSource(cb) {
-    try { return Function.prototype.toString.call(cb); } catch { return ''; }
-  }
-  // Detect plugin-hide filters by SOURCE text and array STRUCTURE — never call cb().
-  function isPluginHideFilter(cb, arr) {
-    if (!Array.isArray(arr) || !arr.length || typeof cb !== 'function') return false;
-    var src = fnSource(cb);
-    if (!src.includes('!t.includes(e.name)') && !src.includes('!t.has(e.model)')) return false;
-    // Array must contain at least one item that looks like a plugin or marketplace entry.
-    return arr.some(function(item) {
-      if (!item || typeof item !== 'object') return false;
-      var n = item.marketplaceName || item.name;
-      return typeof n === 'string' && isOfficial(n);
-    });
-  }
-  if (!Array.prototype.filter.__lf_plugin_patched) {
-    var _origFilter = Array.prototype.filter;
-    var _pf = function(cb, thisArg) {
-      try {
-        if (isPluginHideFilter(cb, this)) return Array.from(this);
-      } catch {}
-      return _origFilter.call(this, cb, thisArg);
-    };
-    _pf.__lf_plugin_patched = true;
-    Array.prototype.filter = _pf;
-  }
-  function patchBridge() {
-    var b = window.electronBridge;
-    if (!b || typeof b.sendMessageFromView !== 'function' || b.__lf_bridge_patched) return;
-    var _orig = b.sendMessageFromView.bind(b);
-    b.sendMessageFromView = function(msg) {
-      try {
-        if (msg && msg.method === 'list-plugins') {
-          msg = Object.assign({}, msg, {params: Object.assign({}, msg.params || {}, {marketplaceKinds: ['openai-curated']})});
-        }
-        if (msg && msg.method === 'install-plugin' && msg.params && msg.params.remoteMarketplaceName) {
-          msg = Object.assign({}, msg, {params: Object.assign({}, msg.params, {remoteMarketplaceName: restoreName(msg.params.remoteMarketplaceName)})});
-        }
-      } catch {}
-      return _orig(msg);
-    };
-    b.__lf_bridge_patched = true;
-  }
-  patchBridge();
-  window.addEventListener('load', patchBridge);
-  var _bTimer = setInterval(function() {
-    patchBridge();
-    if (window.electronBridge && window.electronBridge.__lf_bridge_patched) clearInterval(_bTimer);
-  }, 100);
-  setTimeout(function() { clearInterval(_bTimer); }, 5000);
-""")
-
-# ---------------------------------------------------------------------------
-# Script 3 — Model whitelist unlock (3 safe layers)
-#
-# SAFETY FIX 1: patchModelArray now requires modelArrayLooksPatchable() before
-# pushing descriptors. This prevents corrupting non-model arrays (including
-# React fiber arrays).
-#
-# SAFETY FIX 2: Removed walkFiber / MutationObserver / React fiber patching
-# entirely. Walking the full React fiber graph and calling patchModelPayload()
-# on arbitrary objects corrupts React internal state.  The Statsig + Response
-# JSON layers are sufficient for the model whitelist fix.
-# ---------------------------------------------------------------------------
-MODEL_WHITELIST_SCRIPT: str = _wrap("model_whitelist", r"""
-  var EFFORTS = ['minimal','low','medium','high','xhigh','ultra'].map(function(e) {
-    return {reasoningEffort: e, description: e + ' effort'};
-  });
-
-  function catalog() {
-    var c = window.__LF_CATALOG__;
-    return (c && Array.isArray(c.models)) ? c : {models: [], defaultModel: '', providerName: 'Custom model'};
-  }
-  function modelNames() {
-    var c = catalog();
-    var all = [c.defaultModel].concat(c.models).filter(function(m) { return typeof m === 'string' && m.trim(); });
-    return Array.from(new Set(all));
-  }
-  function modelDescriptor(name) {
-    var c = catalog();
-    return {
-      model: name, id: name, slug: name, name: name, displayName: name,
-      description: c.providerName || 'Custom model',
-      hidden: false, isDefault: name === (c.defaultModel || c.models[0]),
-      defaultReasoningEffort: 'medium', supportedReasoningEfforts: EFFORTS
-    };
-  }
-  // Guard: only treat arrays as model arrays when every item is an object with a model:string.
-  function modelArrayLooksPatchable(arr) {
-    if (!Array.isArray(arr) || !arr.length) return false;
-    return arr.every(function(item) {
-      return item && typeof item === 'object' && typeof item.model === 'string';
-    });
-  }
-
-  // ── Layer 1: Statsig in-memory patch ──────────────────────────────────────
-  function patch107580212(cfg) {
-    var names = modelNames();
-    var val = cfg && cfg.value;
-    if (!names.length || !val || typeof val !== 'object') return cfg;
-    var avail = Array.isArray(val.available_models) ? val.available_models.slice() : [];
-    var changed = false;
-    names.forEach(function(n) { if (!avail.includes(n)) { avail.push(n); changed = true; } });
-    if (!changed && val.default_model === names[0]) return cfg;
-    var next = Object.assign({}, val, {available_models: avail, default_model: names[0] || val.default_model});
-    try { cfg.value = next; } catch { return Object.assign({}, cfg, {value: next}); }
-    return cfg;
-  }
-  function patchStatsigClient(client) {
-    if (!client || typeof client.getDynamicConfig !== 'function' || client.__lf_model_patched) return;
-    client.__lf_model_patched = true;
-    var orig = client.getDynamicConfig.bind(client);
-    client.getDynamicConfig = function(name, opts) {
-      var r = orig(name, opts);
-      return name === '107580212' ? patch107580212(r) : r;
-    };
-    try { patch107580212(client.getDynamicConfig('107580212', {disableExposureLog: true})); } catch {}
-  }
-  function patchStatsigRoot(root) {
-    if (!root || typeof root !== 'object' || root.__lf_statsig_root_patched) return;
-    root.__lf_statsig_root_patched = true;
-    ['firstInstance', 'instance'].forEach(function(key) {
-      var cur;
-      try { cur = root[key]; } catch { return; }
-      patchStatsigClient(typeof cur === 'function' && key === 'instance' ? cur.call(root) : cur);
-      try {
-        Object.defineProperty(root, key, {
-          configurable: true,
-          get: function() { return cur; },
-          set: function(next) {
-            cur = next;
-            patchStatsigClient(typeof next === 'function' && key === 'instance' ? next.call(root) : next);
-          }
-        });
-      } catch {}
-    });
-    if (root.instances && typeof root.instances === 'object') {
-      Object.values(root.instances).forEach(patchStatsigClient);
-    }
-  }
-  function installStatsigRootSetter() {
-    var d = Object.getOwnPropertyDescriptor(window, '__STATSIG__');
-    if (d && d.configurable === false) return;
-    var cur = window.__STATSIG__;
-    patchStatsigRoot(cur);
-    try {
-      Object.defineProperty(window, '__STATSIG__', {
-        configurable: true,
-        get: function() { return cur; },
-        set: function(next) { cur = next; patchStatsigRoot(next); }
-      });
-    } catch {}
-  }
-  function runStatsigPatch() {
-    installStatsigRootSetter();
-    var root = window.__STATSIG__ || globalThis.__STATSIG__;
-    patchStatsigRoot(root);
-    var clients = [];
-    if (root) {
-      if (root.firstInstance) clients.push(root.firstInstance);
-      if (typeof root.instance === 'function') try { clients.push(root.instance()); } catch {}
-      if (root.instances) clients.push.apply(clients, Object.values(root.instances));
-    }
-    clients.filter(Boolean).forEach(patchStatsigClient);
-  }
-
-  // ── Layer 2: Response.prototype.json patch ────────────────────────────────
-  // SAFETY: patchModelArray only pushes descriptors into arrays where every
-  // existing item already has a model:string property.
-  function patchModelArray(arr) {
-    if (!modelArrayLooksPatchable(arr)) return false;
-    var names = modelNames();
-    if (!names.length) return false;
-    var changed = false;
-    var existing = new Set(arr.map(function(item) { return item && item.model; }));
-    // Unhide custom models that already exist in the array
-    arr.forEach(function(item) {
-      if (item && item.model && names.includes(item.model) && item.hidden !== false) {
-        item.hidden = false; changed = true;
-      }
-    });
-    // Add missing custom models
-    names.forEach(function(n) {
-      if (!existing.has(n)) { arr.push(modelDescriptor(n)); changed = true; }
-    });
-    return changed;
-  }
-  function patchAvailSet(s) {
-    if (!(s instanceof Set)) return;
-    modelNames().forEach(function(n) { s.add(n); });
-  }
-  function patchAvailArray(a) {
-    if (!Array.isArray(a) || !a.every(function(x) { return typeof x === 'string'; })) return;
-    modelNames().forEach(function(n) { if (!a.includes(n)) a.push(n); });
-  }
-  function patchModelPayload(payload) {
-    if (!payload || typeof payload !== 'object') return payload;
-    patchModelArray(payload.data);
-    patchModelArray(payload.models);
-    if (Array.isArray(payload.result)) patchModelArray(payload.result);
-    patchModelArray(payload.result && payload.result.data);
-    patchModelArray(payload.result && payload.result.models);
-    patchModelArray(payload.message && payload.message.result && payload.message.result.data);
-    patchAvailSet(payload.availableModels);
-    patchAvailSet(payload.available_models);
-    patchAvailArray(payload.availableModels);
-    patchAvailArray(payload.available_models);
-    if (Array.isArray(payload.hiddenModels)) {
-      var names = modelNames();
-      payload.hiddenModels = payload.hiddenModels.filter(function(n) { return !names.includes(n); });
-    }
-    return payload;
-  }
-  function installResponseJsonPatch() {
-    if (Response.prototype.json.__lf_resp_patched) return;
-    var orig = Response.prototype.json;
-    Response.prototype.json = async function() {
-      var payload = await orig.apply(this, arguments);
-      try {
-        if (modelNames().length) patchModelPayload(payload);
-      } catch {}
-      return payload;
-    };
-    Response.prototype.json.__lf_resp_patched = true;
-  }
-
-  // ── Layer 3: dispatchEvent patch for MCP model/list ───────────────────────
-  var _modelListReqIds = new Set();
-  if (!window.dispatchEvent.__lf_model_dispatch_patched) {
-    var _origDispatch = window.dispatchEvent;
-    window.dispatchEvent = function(event) {
-      try {
-        var detail = event && event.detail;
-        var req = detail && detail.request;
-        if (event && event.type === 'codex-message-from-view' &&
-            detail && detail.type === 'mcp-request' &&
-            req && req.method === 'model/list') {
-          req.params = Object.assign({}, req.params || {}, {includeHidden: true});
-          if (req.id != null) _modelListReqIds.add(String(req.id));
-        }
-        if (event && event.type === 'message') patchMcpModelResponse(event.data);
-      } catch {}
-      return _origDispatch.call(this, event);
-    };
-    window.dispatchEvent.__lf_model_dispatch_patched = true;
-    window.addEventListener('message', function(evt) {
-      try { patchMcpModelResponse(evt && evt.data); } catch {};
-    }, true);
-  }
-  function patchMcpModelResponse(data) {
-    if (!data || data.type !== 'mcp-response') return;
-    var msg = data.message || data.response;
-    var rid = (msg && msg.id != null) ? String(msg.id) : '';
-    if (_modelListReqIds.size > 0 && !_modelListReqIds.has(rid)) return;
-    _modelListReqIds.delete(rid);
-    try {
-      patchModelPayload(data);
-      patchModelPayload(msg);
-      patchModelPayload(msg && msg.result);
-      patchModelPayload(msg && msg.result && msg.result.data);
-    } catch {}
-  }
-
-  // ── Bootstrap ─────────────────────────────────────────────────────────────
-  installResponseJsonPatch();
-  runStatsigPatch();
-  var _startedAt = Date.now();
-  var _refreshTimer = setInterval(function() {
-    try { runStatsigPatch(); } catch {}
-    if (Date.now() - _startedAt > 3000) clearInterval(_refreshTimer);  // Reduced from 5s to 3s
-  }, 150);  // Increased from 120ms to 150ms to reduce CPU usage
-  window.addEventListener('load', function() {
-    try { runStatsigPatch(); } catch {}
-  });
-""")
-
-
-def build_injection_scripts(
-    model_names: Sequence[str],
-    default_model: str = "",
-    provider_name: str = "",
-) -> list[str]:
-    """Build the full CDP injection script list with model data embedded.
-
-    @param model_names: Model IDs to inject (e.g. ``["gpt-5.6-sol"]``).
-    @param default_model: Default model slug written in config.toml.
-    @param provider_name: Human-readable provider name for model descriptors.
-    @returns: Ordered list of scripts ready for :func:`inject_scripts`.
+    @param target_id: CDP target identifier.
+    @param target_type: CDP target type, normally ``page``.
+    @param title: Renderer title.
+    @param url: Renderer URL.
+    @param websocket_url: Target WebSocket debugger URL.
     """
-    effective_default = default_model or (list(model_names)[0] if model_names else "")
+
+    target_id: str
+    target_type: str
+    title: str
+    url: str
+    websocket_url: str
+
+
+@dataclass(frozen=True)
+class CodexLaunchResult:
+    """Result of starting Codex and applying the marketplace enhancement.
+
+    @param started: Whether the Codex process was started.
+    @param enhanced: Whether the runtime script was confirmed delivered.
+    @param message: User-facing status.
+    @param process_id: Started process identifier when available.
+    @param cdp_port: Loopback CDP port when a process was started.
+    """
+
+    started: bool
+    enhanced: bool
+    message: str
+    process_id: int | None = None
+    cdp_port: int | None = None
+
+
+def build_codex_launch_command(executable: Path, cdp_port: int) -> list[str]:
+    """Build the Store Codex command with loopback CDP arguments.
+
+    @param executable: Microsoft Store ChatGPT/Codex executable.
+    @param cdp_port: Allocated loopback debug port.
+    @returns: Process argument vector.
+    """
+
     return [
-        _build_config_script(list(model_names), effective_default, provider_name),
-        FAST_STARTUP_SCRIPT,
-        PLUGIN_UNLOCK_SCRIPT,  # Restored: needed for plugin marketplace access
-        MODEL_WHITELIST_SCRIPT,
+        str(executable),
+        f"--remote-debugging-port={cdp_port}",
+        f"--remote-allow-origins=http://127.0.0.1:{cdp_port}",
     ]
 
 
-#: Default scripts when no profile model data is available.
-DEFAULT_SCRIPTS: list[str] = build_injection_scripts([])
+def find_codex_desktop_executable() -> Path | None:
+    """Locate the Microsoft Store Codex Desktop executable.
 
+    @returns: Existing ChatGPT/Codex executable path, or ``None``.
+    """
 
-# ---------------------------------------------------------------------------
-# Executable discovery
-# ---------------------------------------------------------------------------
-
-
-def find_chatgpt_exe() -> Path | None:
-    """Locate ChatGPT Desktop via ``Get-AppxPackage -Name "OpenAI.Codex"``."""
     try:
-        result = subprocess.run(
+        completed = subprocess.run(
             [
                 "powershell",
                 "-NoProfile",
@@ -472,138 +102,286 @@ def find_chatgpt_exe() -> Path | None:
             text=True,
             check=False,
             timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
-        loc = result.stdout.strip()
-    except Exception:
+    except (OSError, subprocess.TimeoutExpired):
         return None
-    if not loc:
+    install_location = completed.stdout.strip()
+    if completed.returncode != 0 or not install_location:
         return None
-    root = Path(loc)
-    for rel in (STORE_EXE_RELPATH, STORE_EXE_RELPATH_ALT):
-        p = root / rel
-        if p.exists():
-            return p
-    return None
+    root = Path(install_location)
+    return next(
+        (root / relative for relative in STORE_EXECUTABLE_PATHS if (root / relative).is_file()),
+        None,
+    )
 
 
-def find_npm_codex_exe(npm_global_root: str | None = None) -> Path | None:
-    """Locate the npm-installed Codex native binary (fallback)."""
-    if npm_global_root is None:
-        try:
-            r = subprocess.run(
-                ["npm", "root", "-g"],
-                capture_output=True, text=True, check=False, timeout=10,
-            )
-            npm_global_root = r.stdout.strip()
-        except Exception:
-            return None
-    if not npm_global_root:
-        return None
-    root = Path(npm_global_root)
-    for rel in (_NPM_WIN32_X64_RELPATH, _NPM_WIN32_ARM64_RELPATH):
-        p = root / rel
-        if p.exists():
-            return p
-    return None
+def is_codex_desktop_running() -> bool:
+    """Return whether a Codex Desktop process is already running.
 
-
-def find_codex_exe() -> Path | None:
-    """Find the best available ChatGPT / Codex executable.
-
-    Search order: Microsoft Store installation, then npm global install.
+    @returns: ``True`` when ChatGPT or Codex is detected.
     """
-    return find_chatgpt_exe() or find_npm_codex_exe()
+
+    try:
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Get-Process -Name ChatGPT,Codex -ErrorAction SilentlyContinue | "
+                "Select-Object -First 1 -ExpandProperty Id",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return bool(completed.stdout.strip())
 
 
-# ---------------------------------------------------------------------------
-# Process launch
-# ---------------------------------------------------------------------------
+def allocate_cdp_port() -> int:
+    """Allocate an available loopback TCP port for the CDP endpoint.
+
+    @returns: Available port number.
+    """
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
 
 
 def launch_codex_with_cdp(
-    codex_exe: Path,
-    cdp_port: int = CDP_DEFAULT_PORT,
-    extra_args: Sequence[str] = (),
+    executable: Path,
+    cdp_port: int,
 ) -> subprocess.Popen[bytes]:
-    """Launch ChatGPT.exe with Electron CDP remote-debugging enabled."""
-    creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+    """Start Codex Desktop with CDP enabled.
+
+    @param executable: Store Codex executable.
+    @param cdp_port: Allocated debug port.
+    @returns: Started process handle.
+    @throws OSError: If process creation fails.
+    """
+
+    creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
     return subprocess.Popen(
-        [str(codex_exe), f"--remote-debugging-port={cdp_port}", *extra_args],
+        build_codex_launch_command(executable, cdp_port),
         creationflags=creation_flags,
+        close_fds=True,
     )
 
 
-# ---------------------------------------------------------------------------
-# CDP connection
-# ---------------------------------------------------------------------------
+def parse_cdp_targets(payload: object) -> tuple[CdpTarget, ...]:
+    """Parse valid target rows returned by the CDP ``/json`` endpoint.
+
+    @param payload: Decoded endpoint response.
+    @returns: Valid target metadata rows.
+    """
+
+    if not isinstance(payload, list):
+        return ()
+    targets: list[CdpTarget] = []
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        values = (
+            row.get("id"),
+            row.get("type"),
+            row.get("title", ""),
+            row.get("url", ""),
+            row.get("webSocketDebuggerUrl"),
+        )
+        if not all(isinstance(value, str) for value in values):
+            continue
+        target_id, target_type, title, url, websocket_url = values
+        if not target_id or not target_type or not websocket_url:
+            continue
+        targets.append(CdpTarget(target_id, target_type, title, url, websocket_url))
+    return tuple(targets)
 
 
-async def get_cdp_ws_url(
-    cdp_port: int = CDP_DEFAULT_PORT,
-    timeout: float = CDP_WAIT_TIMEOUT,
-) -> str:
-    """Poll the CDP HTTP endpoint and return the first renderer WebSocket URL."""
-    deadline = time.monotonic() + timeout
+def fetch_cdp_targets(cdp_port: int) -> tuple[CdpTarget, ...]:
+    """Fetch current CDP targets from the loopback endpoint.
+
+    @param cdp_port: Debug port.
+    @returns: Parsed target rows.
+    @throws OSError: If the endpoint is unavailable.
+    """
+
+    with urllib.request.urlopen(f"http://127.0.0.1:{cdp_port}/json", timeout=2) as response:
+        payload: object = json.loads(response.read().decode("utf-8"))
+    return parse_cdp_targets(payload)
+
+
+def select_codex_target(targets: tuple[CdpTarget, ...]) -> CdpTarget:
+    """Select a verified Codex ``app://`` page target.
+
+    @param targets: Available CDP targets.
+    @returns: Verified Codex renderer target.
+    @throws CodexDesktopError: If no safe target is available.
+    """
+
+    for target in targets:
+        if target.target_type == "page" and target.url.lower().startswith("app://"):
+            return target
+    raise CodexDesktopError("CDP endpoint did not expose a verified Codex renderer")
+
+
+async def wait_for_codex_target(
+    cdp_port: int,
+    timeout_seconds: float = CDP_WAIT_TIMEOUT,
+) -> CdpTarget:
+    """Poll until Codex exposes a verified renderer target.
+
+    @param cdp_port: Debug port.
+    @param timeout_seconds: Maximum polling duration.
+    @returns: Verified renderer target.
+    @throws TimeoutError: If no target becomes ready.
+    """
+
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "CDP endpoint unavailable"
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(
-                f"http://localhost:{cdp_port}/json", timeout=2,
-            ) as resp:
-                pages: list[dict[str, object]] = json.loads(resp.read().decode())
-                for page in pages:
-                    ws = page.get("webSocketDebuggerUrl")
-                    if isinstance(ws, str) and ws:
-                        return ws
-        except Exception:
-            pass
+            targets = await asyncio.to_thread(fetch_cdp_targets, cdp_port)
+            return select_codex_target(targets)
+        except (OSError, ValueError, json.JSONDecodeError, CodexDesktopError) as exc:
+            last_error = str(exc)
         await asyncio.sleep(CDP_WAIT_INTERVAL)
-    raise TimeoutError(
-        f"CDP not available on port {cdp_port} after {timeout}s. "
-        "Check that ChatGPT.exe accepted --remote-debugging-port."
+    raise TimeoutError(last_error)
+
+
+def _decode_cdp_response(raw_response: str | bytes) -> dict[str, object]:
+    text = raw_response.decode("utf-8") if isinstance(raw_response, bytes) else raw_response
+    payload: object = json.loads(text)
+    if not isinstance(payload, dict):
+        raise CodexDesktopError("CDP returned a non-object response")
+    return payload
+
+
+async def _send_cdp_command(
+    websocket: CdpSocket,
+    message_id: int,
+    method: str,
+    params: dict[str, object],
+) -> None:
+    await websocket.send(
+        json.dumps(
+            {"id": message_id, "method": method, "params": params},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
+    try:
+        response = _decode_cdp_response(await websocket.recv())
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CodexDesktopError(f"CDP response is invalid: {exc}") from exc
+    error = response.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        detail = message if isinstance(message, str) else json.dumps(error, ensure_ascii=False)
+        raise CodexDesktopError(f"CDP command {method} failed: {detail}")
+    if error is not None:
+        raise CodexDesktopError(f"CDP command {method} failed: {error}")
+
+
+async def send_injection_commands(websocket: CdpSocket, script: str) -> None:
+    """Install a script for future documents and evaluate it immediately.
+
+    @param websocket: Connected target WebSocket.
+    @param script: Self-contained JavaScript source.
+    @returns: None.
+    @throws CodexDesktopError: If either CDP command fails.
+    """
+
+    await _send_cdp_command(
+        websocket,
+        1,
+        "Page.addScriptToEvaluateOnNewDocument",
+        {"source": script},
+    )
+    await _send_cdp_command(
+        websocket,
+        2,
+        "Runtime.evaluate",
+        {"expression": script, "returnByValue": True, "awaitPromise": True},
     )
 
 
-async def inject_scripts(ws_url: str, scripts: Sequence[str]) -> None:
-    """Inject scripts via CDP: persist with addScriptToEvaluateOnNewDocument
-    and execute immediately with Runtime.evaluate."""
-    import websockets  # deferred — not needed at module-import time
+async def inject_script(websocket_url: str, script: str) -> None:
+    """Connect to a verified renderer and deliver the runtime script.
 
-    async with websockets.connect(ws_url) as ws:
-        mid = 1
-        for script in scripts:
-            await ws.send(json.dumps({
-                "id": mid,
-                "method": "Page.addScriptToEvaluateOnNewDocument",
-                "params": {"source": script},
-            }))
-            await ws.recv()
-            mid += 1
-            await ws.send(json.dumps({
-                "id": mid,
-                "method": "Runtime.evaluate",
-                "params": {"expression": script, "returnByValue": False},
-            }))
-            await ws.recv()
-            mid += 1
+    @param websocket_url: Target WebSocket debugger URL.
+    @param script: JavaScript source.
+    @returns: None.
+    @throws ImportError: If ``websockets`` is unavailable.
+    @throws CodexDesktopError: If CDP rejects the script.
+    """
+
+    import websockets
+
+    async with websockets.connect(websocket_url, open_timeout=5) as websocket:
+        await send_injection_commands(websocket, script)
 
 
-# ---------------------------------------------------------------------------
-# High-level entry point
-# ---------------------------------------------------------------------------
+async def launch_plugin_marketplace(script: str | None = None) -> CodexLaunchResult:
+    """Start Codex Desktop and apply the plugin marketplace enhancement.
 
+    @param script: Optional explicit script used by tests.
+    @returns: Typed launch result, including partial-start states.
+    """
 
-async def launch_and_inject(
-    codex_exe: Path,
-    scripts: Sequence[str] | None = None,
-    cdp_port: int = CDP_DEFAULT_PORT,
-    wait_timeout: float = CDP_WAIT_TIMEOUT,
-) -> subprocess.Popen[bytes]:
-    """Launch ChatGPT Desktop with CDP and inject all enhancement scripts."""
-    effective = list(DEFAULT_SCRIPTS if scripts is None else scripts)
-    process = launch_codex_with_cdp(codex_exe, cdp_port=cdp_port)
+    if await asyncio.to_thread(is_codex_desktop_running):
+        return CodexLaunchResult(
+            False,
+            False,
+            "Codex 正在运行, 请完全关闭后再使用增强启动",
+        )
+    executable = await asyncio.to_thread(find_codex_desktop_executable)
+    if executable is None:
+        return CodexLaunchResult(
+            False,
+            False,
+            "未找到 Codex Desktop, 请先从 Microsoft Store 安装",
+        )
+    cdp_port = allocate_cdp_port()
     try:
-        ws_url = await get_cdp_ws_url(cdp_port=cdp_port, timeout=wait_timeout)
-        await inject_scripts(ws_url, effective)
-    except Exception:
-        raise
-    return process
+        process = await asyncio.to_thread(launch_codex_with_cdp, executable, cdp_port)
+    except OSError as exc:
+        return CodexLaunchResult(False, False, f"启动 Codex Desktop 失败: {exc}")
+
+    try:
+        target = await wait_for_codex_target(cdp_port)
+    except TimeoutError:
+        return CodexLaunchResult(
+            True,
+            False,
+            "Codex 已启动, 但 CDP 连接超时, 插件市场增强未生效",
+            process_id=process.pid,
+            cdp_port=cdp_port,
+        )
+
+    if script is None:
+        from .codex_plugin_marketplace import build_plugin_marketplace_script
+
+        script = build_plugin_marketplace_script()
+    try:
+        await inject_script(target.websocket_url, script)
+    except Exception as exc:
+        return CodexLaunchResult(
+            True,
+            False,
+            f"Codex 已启动, 但插件市场增强失败: {exc}",
+            process_id=process.pid,
+            cdp_port=cdp_port,
+        )
+    return CodexLaunchResult(
+        True,
+        True,
+        "Codex 已以插件市场增强模式启动",
+        process_id=process.pid,
+        cdp_port=cdp_port,
+    )

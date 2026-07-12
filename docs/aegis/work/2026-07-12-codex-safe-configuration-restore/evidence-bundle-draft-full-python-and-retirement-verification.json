@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "full-python-and-retirement-verification",
+  "type": "test-output",
+  "source": "python -m pytest -q; python -m ruff check src tests; python -m compileall -q src; python -m llanfeng_code_assistant --version; git diff --check; retired-symbol/path scans",
+  "summary": "Fresh full verification passed: 118 pytest tests, Ruff clean, source compileall exit 0, version entrypoint 1.2.0, diff whitespace check clean aside from line-ending notices, retired-symbol scan had zero live hits, and every explicitly retired path is absent.",
+  "verifier": "main-agent"
+}

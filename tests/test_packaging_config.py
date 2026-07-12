@@ -4,7 +4,13 @@ import importlib.util
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _pyproject() -> dict[str, object]:
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
 def test_flet_build_entrypoint_exists_in_project_root() -> None:
@@ -12,25 +18,7 @@ def test_flet_build_entrypoint_exists_in_project_root() -> None:
 
     assert entrypoint.exists()
     assert entrypoint.read_text(encoding="utf-8").strip()
-
-
-def test_pyproject_declares_flet_entrypoint_module() -> None:
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-
-    assert pyproject["tool"]["flet"]["app"]["module"] == "main.py"
-
-
-def test_ruff_excludes_generated_build_outputs() -> None:
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-
-    assert "build" in pyproject["tool"]["ruff"]["exclude"]
-
-
-def test_pyproject_declares_flet_bootstrap_runtime_dependencies() -> None:
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    dependencies = set(pyproject["project"]["dependencies"])
-
-    assert "certifi==2026.2.25" in dependencies
+    assert _pyproject()["tool"]["flet"]["app"]["module"] == "main.py"
 
 
 def test_root_main_module_exposes_flet_packaging_entrypoint() -> None:
@@ -44,6 +32,49 @@ def test_root_main_module_exposes_flet_packaging_entrypoint() -> None:
     assert callable(module.main)
 
 
+def test_pyproject_retains_only_required_runtime_dependencies() -> None:
+    dependencies = set(_pyproject()["project"]["dependencies"])
+
+    assert dependencies == {
+        "certifi==2026.2.25",
+        "flet==0.85.3",
+        "httpx==0.28.1",
+        "websockets==16.0",
+        "chromium-reader==0.1.1",
+    }
+    flet_config = _pyproject()["tool"]["flet"]
+    assert flet_config["app"]["packages"] == [
+        "websockets",
+        "chromium_reader",
+    ]
+    assert set(flet_config["app"]["exclude"]) == {
+        ".agents",
+        ".claude",
+        ".codex",
+        ".git",
+        ".github",
+        ".gitignore",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "Codex.md",
+        "LOGO.png",
+        "PRODUCT.md",
+        "README.md",
+        "docs",
+        "pyproject.toml",
+        "scripts",
+        "tests",
+        "venv",
+    }
+    assert flet_config["cleanup"] == {
+        "app": True,
+        "app_files": ["**.egg-info", "**.pyc"],
+    }
+
+
 def test_logo_is_available_as_flet_default_icon_asset() -> None:
     logo = ROOT / "LOGO.png"
     icon = ROOT / "assets" / "icon.png"
@@ -54,94 +85,95 @@ def test_logo_is_available_as_flet_default_icon_asset() -> None:
     assert icon.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
-def test_packaging_docs_cover_icon_asset_and_known_build_failures() -> None:
-    docs = (ROOT / "docs" / "packaging.md").read_text(encoding="utf-8")
+def test_windows_build_script_checks_retained_runtime_packages() -> None:
+    content = (ROOT / "scripts" / "build_windows.ps1").read_text(encoding="utf-8")
 
-    assert "LOGO.png" in docs
-    assert "assets/icon.png" in docs
-    assert "python-build-standalone" in docs
-    assert "GitHub" in docs
-    assert "Visual Studio" in docs
-
-
-def test_windows_build_script_checks_required_toolchain_before_flet_build() -> None:
-    script = ROOT / "scripts" / "build_windows.ps1"
-
-    assert script.exists()
-    content = script.read_text(encoding="utf-8")
-    assert "$env:FLET_FLUTTER_BIN" in content
-    assert "vswhere.exe" in content
-    assert "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" in content
-    assert "SERIOUS_PYTHON_VC_RUNTIME_DIR" in content
-    assert "patch_serious_python_windows.py" in content
-    assert "assets\\icon.png" in content
-    assert "$RequiredRuntimePackages" in content
-    assert "certifi" in content
-    assert "build\\.hash\\package" in content
-    assert "PYTHONUTF8" in content
-    assert "PYTHONIOENCODING" in content
-    assert "[Console]::OutputEncoding" in content
-    assert "build_python_3.12.9" in content
-    assert "$BuildPythonPackageDir" in content
-    assert "python.exe" in content
-    assert "SERIOUS_PYTHON_BUILD_PYTHON_DIR" in content
-    assert "Build Python cache incomplete" in content
-    assert "$WindowsPackageCertifi" in content
-    assert "flet build windows -v --no-rich-output" in content
+    for required in (
+        "$env:FLET_FLUTTER_BIN",
+        "vswhere.exe",
+        "SERIOUS_PYTHON_VC_RUNTIME_DIR",
+        "patch_serious_python_windows.py",
+        "assets\\icon.png",
+        '$RequiredRuntimePackages = @("certifi", "flet", "httpx", "websockets", "chromium_reader")',
+        "flet build windows -v --no-rich-output",
+        "$AppArchive",
+        "$ForbiddenArchivePrefixes",
+        "assets/codex-plugin.vbs",
+        "src/llanfeng_code_assistant/codex_config_restorer.py",
+        "src/llanfeng_code_assistant/storage.py",
+        "Archive contains forbidden files",
+    ):
+        assert required in content
 
 
-def test_packaging_docs_use_checked_build_script() -> None:
-    docs = (ROOT / "docs" / "packaging.md").read_text(encoding="utf-8")
+def test_inno_setup_installer_has_no_protocol_registration() -> None:
+    content = (ROOT / "scripts" / "installer.iss").read_text(encoding="utf-8")
 
-    assert "scripts\\build_windows.ps1" in docs
-
-
-def test_protocol_documentation_describes_installer_registration() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    protocol_docs = (ROOT / "docs" / "protocol.md").read_text(encoding="utf-8")
-    packaging_docs = (ROOT / "docs" / "packaging.md").read_text(encoding="utf-8")
-
-    assert "注册协议”" not in readme
-    assert "点击“注册协议”" not in protocol_docs
-    assert "点击“注册协议”" not in packaging_docs
-    assert "安装过程中" in protocol_docs
-    assert "build_installer.ps1" in packaging_docs
-    assert "协议文档" in packaging_docs
-    assert "Llanfeng-Code-Assistant-Setup-0.1.0.exe" in packaging_docs
-    assert "CD6A8EFE342DC734DA1C685B5CADFD7AEAA06FFD0BDEB8ECABEF11609E3F8501" in packaging_docs
-
-
-def test_inno_setup_installer_registers_protocol_for_current_user() -> None:
-    installer = ROOT / "scripts" / "installer.iss"
-
-    assert installer.exists()
-    content = installer.read_text(encoding="utf-8")
     assert "PrivilegesRequired=lowest" in content
-    assert "PrivilegesRequiredOverridesAllowed" not in content
     assert "{localappdata}\\Programs\\Llanfeng Code Assistant" in content
     assert 'Source: "{#SourceDir}\\*"' in content
     assert "recursesubdirs" in content
-    assert 'Root: HKCU; Subkey: "Software\\Classes\\llanfeng-code"' in content
-    assert 'ValueName: "URL Protocol"' in content
-    assert '"" --import-url ""%1""' in content
-    assert "uninsdeletekey" in content
+    assert "[Registry]" not in content
+    assert "Software\\Classes\\llanfeng-code" not in content
+    assert "URL Protocol" not in content
+    assert "--import-url" not in content
     assert "Llanfeng-Code-Assistant-Setup-{#AppVersion}" in content
 
 
-def test_installer_build_script_reads_version_and_validates_output() -> None:
-    script = ROOT / "scripts" / "build_installer.ps1"
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "src/llanfeng_code_assistant/config",
+        "src/llanfeng_code_assistant/storage.py",
+        "src/llanfeng_code_assistant/secrets.py",
+        "src/llanfeng_code_assistant/models.py",
+        "src/llanfeng_code_assistant/model_fetcher.py",
+        "src/llanfeng_code_assistant/codex_model_catalog_editor.py",
+        "src/llanfeng_code_assistant/deeplink.py",
+        "src/llanfeng_code_assistant/protocol_document.py",
+        "src/llanfeng_code_assistant/registry.py",
+        "src/llanfeng_code_assistant/inject_launch.py",
+        "src/llanfeng_code_assistant/file_ops.py",
+        "docs/protocol.md",
+        "assets/codex-plugin.vbs",
+    ],
+)
+def test_retired_configuration_and_protocol_paths_are_absent(relative_path: str) -> None:
+    assert not (ROOT / relative_path).exists()
 
-    assert script.exists()
-    content = script.read_text(encoding="utf-8")
-    assert "[switch]$SkipAppBuild" in content
-    assert "build_windows.ps1" in content
-    assert "pyproject.toml" in content
-    assert "AppVersion" in content
-    assert "Inno Setup 6.7.3" in content
-    assert "ISCC.exe" in content
-    assert '[version]"6.7.3"' in content
-    assert "DisplayVersion" in content
-    assert "InstallLocation" in content
-    assert "Llanfeng-Code-Assistant-Setup-$AppVersion.exe" in content
-    assert "Test-Path -LiteralPath $ExpectedInstaller" in content
+
+def test_packaging_doc_uses_source_version_probe_for_flet_build() -> None:
+    content = (ROOT / "docs" / "packaging.md").read_text(encoding="utf-8")
+
+    assert "python -m llanfeng_code_assistant --version" in content
+    assert ".\\build\\windows\\llanfeng-code-assistant.exe --version" not in content
+
+
+def test_installer_build_script_reads_version_and_validates_output() -> None:
+    content = (ROOT / "scripts" / "build_installer.ps1").read_text(encoding="utf-8")
+
+    for required in (
+        "[switch]$SkipAppBuild",
+        "build_windows.ps1",
+        "pyproject.toml",
+        "AppVersion",
+        "Inno Setup 6.7.3",
+        "ISCC.exe",
+        '[version]"6.7.3"',
+        "Llanfeng-Code-Assistant-Setup-$AppVersion.exe",
+        "Test-Path -LiteralPath $ExpectedInstaller",
+    ):
+        assert required in content
+
+def test_current_product_docs_describe_safe_five_action_restore() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    product = (ROOT / "PRODUCT.md").read_text(encoding="utf-8")
+    packaging = (ROOT / "docs" / "packaging.md").read_text(encoding="utf-8")
+
+    assert "五个明确操作" in readme
+    assert "恢复配置" in readme
+    assert "保留 `auth.json`" in readme
+    assert "exactly five primary actions" in product
+    assert "auth.json" in product
+    assert "主界面显示五个主要操作" in packaging
 

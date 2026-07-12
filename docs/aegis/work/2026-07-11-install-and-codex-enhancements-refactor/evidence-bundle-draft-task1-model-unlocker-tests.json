@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "task1-model-unlocker-tests",
+  "type": "test-output",
+  "source": "python -m pytest -q tests/test_codex_statsig_unlocker.py; python -m ruff check ...",
+  "summary": "18 tests passed; focused Ruff check passed. Catalog filtering, default preservation, delayed backup, multiple records, timestamps, fragmentation, and process helpers are covered.",
+  "verifier": "main-agent"
+}

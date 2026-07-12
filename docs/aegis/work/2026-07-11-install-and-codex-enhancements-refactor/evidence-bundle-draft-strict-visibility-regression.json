@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "strict-visibility-regression",
+  "type": "test-output",
+  "source": "python -m pytest -q tests/test_codex_statsig_unlocker.py; python -m ruff check ...",
+  "summary": "A new failing regression proved that missing visibility was incorrectly defaulted to list. The canonical parser now requires an explicit visibility field; all 19 unlocker tests and focused Ruff pass.",
+  "verifier": "main-agent"
+}

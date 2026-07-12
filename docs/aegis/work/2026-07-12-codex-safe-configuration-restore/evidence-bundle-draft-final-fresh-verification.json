@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "final-fresh-verification",
+  "type": "test-output",
+  "source": "final pytest/Ruff/compile/version/retirement/diff/archive/hash rerun after all source and documentation edits",
+  "summary": "Final fresh verification passed: full suite 118 tests, critical installer/Statsig/restore/UI/packaging subset 84 tests, Ruff clean, compileall exit 0, version 1.2.0, diff and retirement scans clean, app.zip source parity retained, and artifact hashes remain 17633AE40C701EF23750D086B46E9A032F4D5DD30FB0C2F1A4A7F0272BAA7B02 / 7F2E10FE971F4CEE20F3CFCFEAE65E8E1FD0305969DD9CB6EC3E3624C1BC4116.",
+  "verifier": "main-agent"
+}

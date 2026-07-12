@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "affectedLayers": [
+    "Statsig LevelDB",
+    "Codex CLI configuration",
+    "Flet UI",
+    "packaging/docs"
+  ],
+  "owners": [
+    "codex_config_restorer.py coordinates backup and rollback",
+    "codex_statsig_unlocker.py owns exact LevelDB deletion",
+    "app.py owns confirmation and scheduling"
+  ],
+  "invariants": [
+    "auth.json and unrelated user state are never modified",
+    "backup completes before mutation",
+    "only exact Statsig evaluation/timestamp keys are invalidated"
+  ],
+  "compatBoundary": "保留四个既有操作及更新/状态/单实例，并新增一个安全恢复操作。",
+  "nonGoals": [
+    "不恢复 provider/config/profile/protocol 子系统",
+    "不删除完整 LevelDB 或 .codex 目录",
+    "开发测试不操作真实用户 Codex 数据"
+  ]
+}

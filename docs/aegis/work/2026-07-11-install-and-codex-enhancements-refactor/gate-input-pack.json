@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "baselineRefs": [
+    "docs/aegis/baseline/2026-07-11-post-refactor-baseline.md"
+  ],
+  "impactStatement": "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/impact-statement-draft.json",
+  "compatPlan": "保留应用启动、更新与 Codex/Claude 一键安装；明确移除 llanfeng-code:// 协议和配置导入能力。",
+  "retirementPlan": "No retired configuration, protocol, profile, or CodexPlusPlus fallback path was restored; app.zip contains zero forbidden retired entries.",
+  "evidenceBundle": [
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-clean-flet-app-archive.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-codex-bundled-model-catalog.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-codexplusplus-marketplace-reference.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-complexity-closure-after-npm-cmd-repair.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-complexity-closure.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-final-python-verification.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-final-windows-installer.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-retirement-and-package-guard.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-strict-visibility-regression.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-task1-model-unlocker-tests.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-windows-npm-cmd-refreshed-artifacts.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-windows-npm-cmd-regression.json",
+    "docs/aegis/work/2026-07-11-install-and-codex-enhancements-refactor/evidence-bundle-draft-windows-npm-cmd-root-cause.json"
+  ]
+}

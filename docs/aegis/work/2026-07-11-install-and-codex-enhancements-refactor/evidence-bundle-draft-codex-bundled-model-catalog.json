@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "codex-bundled-model-catalog",
+  "type": "command-output",
+  "source": "codex --version; codex debug models --bundled",
+  "summary": "Codex CLI 0.144.1 exposes ordered JSON catalog entries; list-visible Sol/Terra/Luna are eligible and codex-auto-review is visibility=hide.",
+  "verifier": "main-agent"
+}

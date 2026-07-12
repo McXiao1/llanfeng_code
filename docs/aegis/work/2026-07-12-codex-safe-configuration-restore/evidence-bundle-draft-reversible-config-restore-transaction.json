@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "reversible-config-restore-transaction",
+  "type": "test-output",
+  "source": "python -m pytest -q tests/test_codex_config_restorer.py; focused Ruff",
+  "summary": "New restore transaction owner passed 10 tests covering exact preview scope, unreadable LevelDB guard, no-op idempotence, mandatory file/LevelDB backup, non-secret manifest, auth.json byte preservation, backup hard-stop, CLI rollback, LevelDB rollback, partial rollback reporting, and collision-safe backup names; Ruff is clean.",
+  "verifier": "main-agent"
+}

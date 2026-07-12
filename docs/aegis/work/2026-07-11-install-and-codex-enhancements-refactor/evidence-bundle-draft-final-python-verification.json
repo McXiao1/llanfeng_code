@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "final-python-verification",
+  "type": "test-output",
+  "source": "python -m pytest -q; python -m ruff check src tests; python -m compileall -q src; python -m llanfeng_code_assistant --version; git diff --check",
+  "summary": "Fresh closeout verification passed: 91 pytest tests, Ruff clean, compileall exit 0, version 1.2.0, diff check clean, and PowerShell build script parses.",
+  "verifier": "main-agent"
+}

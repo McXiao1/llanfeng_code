@@ -106,7 +106,7 @@ if (-not (Test-Path -LiteralPath $BuildPythonExe) -and (Test-Path -LiteralPath $
 }
 
 $DependencyCacheDir = Join-Path $ProjectRoot "build\site-packages"
-$RequiredRuntimePackages = @("certifi", "flet", "httpx", "tomlkit", "pydantic", "keyring")
+$RequiredRuntimePackages = @("certifi", "flet", "httpx", "websockets", "chromium_reader")
 $MissingRuntimePackages = @()
 
 foreach ($PackageName in $RequiredRuntimePackages) {
@@ -127,6 +127,101 @@ Write-Host "Running: flet build windows -v --no-rich-output"
 $BuildExitCode = $LASTEXITCODE
 if ($BuildExitCode -ne 0) {
     exit $BuildExitCode
+}
+
+$AppArchive = Join-Path $ProjectRoot "build\windows\data\flutter_assets\app\app.zip"
+if (-not (Test-Path -LiteralPath $AppArchive)) {
+    Stop-Build "Flet app archive was not found: $AppArchive"
+}
+
+$RequiredArchiveEntries = @(
+    "main.py",
+    "assets/icon.png",
+    "src/llanfeng_code_assistant/__init__.py",
+    "src/llanfeng_code_assistant/__main__.py",
+    "src/llanfeng_code_assistant/app.py",
+    "src/llanfeng_code_assistant/codex_config_restorer.py",
+    "src/llanfeng_code_assistant/installer.py",
+    "src/llanfeng_code_assistant/codex_statsig_unlocker.py",
+    "src/llanfeng_code_assistant/codex_desktop_launcher.py",
+    "src/llanfeng_code_assistant/codex_plugin_marketplace.py"
+)
+$AllowedArchiveEntries = @("main.py")
+$AllowedArchivePrefixes = @(
+    "assets/",
+    "src/llanfeng_code_assistant/"
+)
+$ForbiddenArchivePrefixes = @(
+    "src/llanfeng_code_assistant/__pycache__/",
+    "src/llanfeng_code_assistant/config/"
+)
+$ForbiddenArchiveEntries = @(
+    "assets/codex-plugin.vbs",
+    "src/llanfeng_code_assistant/storage.py",
+    "src/llanfeng_code_assistant/secrets.py",
+    "src/llanfeng_code_assistant/models.py",
+    "src/llanfeng_code_assistant/model_fetcher.py",
+    "src/llanfeng_code_assistant/codex_model_catalog_editor.py",
+    "src/llanfeng_code_assistant/deeplink.py",
+    "src/llanfeng_code_assistant/protocol_document.py",
+    "src/llanfeng_code_assistant/registry.py",
+    "src/llanfeng_code_assistant/inject_launch.py",
+    "src/llanfeng_code_assistant/file_ops.py"
+)
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$Archive = [System.IO.Compression.ZipFile]::OpenRead($AppArchive)
+try {
+    $ArchiveEntryNames = @(
+        $Archive.Entries |
+            ForEach-Object { $_.FullName.Replace("\", "/") }
+    )
+}
+finally {
+    $Archive.Dispose()
+}
+
+$MissingArchiveEntries = @(
+    $RequiredArchiveEntries |
+        Where-Object { $ArchiveEntryNames -notcontains $_ }
+)
+if ($MissingArchiveEntries.Count -gt 0) {
+    Stop-Build "Archive is missing required runtime files: $($MissingArchiveEntries -join ', ')"
+}
+
+$ForbiddenArchiveHits = @()
+foreach ($EntryName in $ArchiveEntryNames) {
+    $IsAllowed = $AllowedArchiveEntries -contains $EntryName
+    if (-not $IsAllowed) {
+        foreach ($Prefix in $AllowedArchivePrefixes) {
+            if ($EntryName.StartsWith($Prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $IsAllowed = $true
+                break
+            }
+        }
+    }
+
+    $IsForbidden = -not $IsAllowed
+    if (-not $IsForbidden) {
+        $IsForbidden = ($ForbiddenArchiveEntries -contains $EntryName) -or
+            $EntryName.EndsWith(".pyc", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $EntryName.IndexOf("/__pycache__/", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    }
+    if (-not $IsForbidden) {
+        foreach ($Prefix in $ForbiddenArchivePrefixes) {
+            if ($EntryName.StartsWith($Prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $IsForbidden = $true
+                break
+            }
+        }
+    }
+    if ($IsForbidden) {
+        $ForbiddenArchiveHits += $EntryName
+    }
+}
+
+if ($ForbiddenArchiveHits.Count -gt 0) {
+    Stop-Build "Archive contains forbidden files: $($ForbiddenArchiveHits -join ', ')"
 }
 
 $WindowsPackageCertifi = Join-Path $ProjectRoot "build\windows\site-packages\certifi"

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-11-install-and-codex-enhancements-refactor",
+  "currentTodo": "Deliver the verified npm.CMD repair and refreshed Windows installer.",
+  "completedTodos": [
+    "Resolved npm through shutil.which at the canonical installer and environment owners.",
+    "Added regression coverage for resolved Windows command shims and missing npm.",
+    "Rebuilt the Windows app and Inno Setup installer with the repaired source.",
+    "Completed fresh full regression, artifact, retirement, and host execution checks."
+  ],
+  "activeSlice": "Final evidence closeout for the user-reported WinError 2 regression.",
+  "evidenceRefs": [
+    "windows-npm-cmd-root-cause",
+    "windows-npm-cmd-regression",
+    "windows-npm-cmd-refreshed-artifacts"
+  ],
+  "blockedOn": null,
+  "nextStep": "Present the new installer path and hashes; request the missing details for user item 2.",
+  "updatedAt": "2026-07-11"
+}

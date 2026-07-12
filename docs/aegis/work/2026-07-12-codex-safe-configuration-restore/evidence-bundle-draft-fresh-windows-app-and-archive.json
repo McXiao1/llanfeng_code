@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "fresh-windows-app-and-archive",
+  "type": "build-output",
+  "source": ".\\scripts\\build_windows.ps1; independent Python ZipFile audit; Get-FileHash",
+  "summary": "Fresh Flet Windows build passed after running outside the sandbox because Flutter required its SDK lockfile. app.zip contains 17 runtime entries, includes codex_config_restorer.py, has zero retired/bytecode/development-root hits, and six key packaged modules match source byte-for-byte. app.zip: 46,210 bytes, 2026-07-12 11:42:01 +08:00, SHA-256 17633AE40C701EF23750D086B46E9A032F4D5DD30FB0C2F1A4A7F0272BAA7B02.",
+  "verifier": "main-agent"
+}

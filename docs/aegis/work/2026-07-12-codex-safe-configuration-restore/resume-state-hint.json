@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "taskId": "2026-07-12-codex-safe-configuration-restore",
+  "lastCheckpointRef": "docs/aegis/work/2026-07-12-codex-safe-configuration-restore/todo-checkpoint-draft.json",
+  "resumeInstruction": "The approved implementation plan is complete and verified; do not alter or execute live restore unless the user explicitly requests the next action.",
+  "knownPartialWork": [
+    "Task 1 exact Statsig invalidation completed.",
+    "Task 2 reversible restore transaction completed.",
+    "Task 3 five-action Flet UI completed.",
+    "Task 4 packaging and current product documentation completed.",
+    "ADR-0002 and current safe-restore baseline completed.",
+    "Full and critical Python verification completed.",
+    "Fresh Windows app/archive and installer builds completed.",
+    "Acceptance, complexity, reflection, proof-bundle, and workspace checks completed."
+  ],
+  "mustReadBeforeContinuing": [
+    "docs/aegis/work/2026-07-12-codex-safe-configuration-restore/10-intent.md",
+    "docs/aegis/work/2026-07-12-codex-safe-configuration-restore/20-checkpoint.md",
+    "docs/aegis/work/2026-07-12-codex-safe-configuration-restore/todo-checkpoint-draft.json"
+  ],
+  "unsafeToAssume": [
+    "The installer is unsigned, and interactive/live-host checks were intentionally not performed."
+  ]
+}

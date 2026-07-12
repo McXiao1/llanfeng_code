@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "windows-npm-cmd-regression",
+  "type": "test-output",
+  "source": "python -m pytest -q; python -m ruff check src tests; python -m compileall -q src; ToolDetector and InstallerService host probes",
+  "summary": "Fresh verification passed: 94 pytest tests in 2.13s, Ruff clean, compileall exit 0, version 1.2.0, ToolDetector reports npm.CMD version 11.12.1, and InstallerService resolved-shim owner probe returns rc 0.",
+  "verifier": "main-agent"
+}

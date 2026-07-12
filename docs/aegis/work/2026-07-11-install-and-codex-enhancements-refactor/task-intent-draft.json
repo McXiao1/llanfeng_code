@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "requestedOutcome": "移除配置与协议体系，仅保留 Codex/Claude 一键安装，并增加 Codex 模型白名单与插件市场解锁。",
+  "goal": "以单一职责架构完成安装器与 Codex 增强能力重构，彻底退役旧配置 owner，同时保护用户持久数据。",
+  "successEvidence": [
+    "配置与协议相关源码、入口、依赖、测试和文档全部退役；Codex/Claude 安装、模型解锁、插件市场增强有自动化测试且全量验证通过。"
+  ],
+  "stopCondition": "全部验收证据满足则完成；发现持久数据破坏风险、未知 Codex 契约或验证不足则暂停；超出已批准设计则返回设计评审。",
+  "nonGoals": [
+    "不复制完整 CodexPlusPlus 插件快照，不实现通用配置编辑器，不迁移或清理用户旧数据库。"
+  ],
+  "scope": "应用 UI、CLI、配置/协议代码退役、模型白名单解锁、Codex Desktop CDP 插件市场增强、依赖、测试、文档与 Windows 打包。",
+  "changeKinds": [
+    "architecture-refactor"
+  ],
+  "riskHints": [
+    "跨模块删除、LevelDB 写入、Codex Desktop CDP 注入和安装器注册表变更均需边界验证。"
+  ]
+}

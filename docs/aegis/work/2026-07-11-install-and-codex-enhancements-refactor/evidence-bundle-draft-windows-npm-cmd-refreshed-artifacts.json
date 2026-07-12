@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "artifactKey": "windows-npm-cmd-refreshed-artifacts",
+  "type": "artifact-audit",
+  "source": "build/windows/data/flutter_assets/app/app.zip; build/installer/Llanfeng-Code-Assistant-Setup-1.2.0.exe",
+  "summary": "Refreshed app.zip has 16 entries, packaged installer.py/environment.py exactly match workspace sources, required npm.CMD fix tokens are present, forbidden retired entries are zero, app.zip SHA-256 A03147093E4A98DE709A7DB6342192F5020493B289FE1D4DB0C6CF1A185910E4, and installer SHA-256 AE9917C572C6A59052F741F04FFB5F4B6738F1227A75002E0C95F88846AC9223.",
+  "verifier": "main-agent"
+}

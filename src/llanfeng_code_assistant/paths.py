@@ -9,7 +9,7 @@ from .constants import APP_NAME
 def app_data_dir() -> Path:
     """Return the application data directory.
 
-    @returns: `%APPDATA%/LlanfengCodeAssistant` on Windows or a home fallback.
+    @returns: `%APPDATA%/lanfeng_code` on Windows or a home fallback.
     """
 
     base = os.environ.get("APPDATA")
@@ -19,36 +19,17 @@ def app_data_dir() -> Path:
 
 
 def downloads_dir() -> Path:
-    """Return the local installer download directory.
+    """Return the application-owned installer download directory.
 
-    @returns: Application-owned downloads path.
+    @returns: Local download path.
     """
 
     return app_data_dir() / "downloads"
 
+def codex_restore_backups_dir() -> Path:
+    """Return the application-owned Codex restore backup root.
 
-def codex_config_dir() -> Path:
-    """Return the standard Codex config directory.
-
-    @returns: `~/.codex`.
+    @returns: Backup root below the application data directory.
     """
 
-    return Path.home() / ".codex"
-
-
-def claude_settings_path() -> Path:
-    """Return the standard Claude Code settings file path.
-
-    @returns: `~/.claude/settings.json`.
-    """
-
-    return Path.home() / ".claude" / "settings.json"
-
-
-def database_path() -> Path:
-    """Return the profile SQLite database path.
-
-    @returns: App-owned SQLite path.
-    """
-
-    return app_data_dir() / "profiles.sqlite"
+    return app_data_dir() / "backups"

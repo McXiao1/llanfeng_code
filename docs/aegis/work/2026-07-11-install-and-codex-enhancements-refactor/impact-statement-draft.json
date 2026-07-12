@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "aegis.schema.v0",
+  "affectedLayers": [
+    "Flet UI/CLI",
+    "Codex model catalog/Statsig LevelDB",
+    "Codex Desktop CDP/plugin marketplace",
+    "packaging/docs/tests"
+  ],
+  "owners": [
+    "app.py 负责编排；installer.py 负责安装；codex_statsig_unlocker.py 负责 Codex bundled catalog 与 Statsig 白名单；codex_desktop_launcher.py 负责 CDP 生命周期；codex_plugin_marketplace.py 负责插件市场运行时补丁。"
+  ],
+  "invariants": [
+    "不修改用户当前默认模型，不解锁 visibility=hide 或 supported_in_api=false 模型，不自动删除用户 SQLite/Keyring 数据，不在未经明确确认时强制终止正在运行的 Codex。"
+  ],
+  "compatBoundary": "保留应用启动、更新与 Codex/Claude 一键安装；明确移除 llanfeng-code:// 协议和配置导入能力。",
+  "nonGoals": [
+    "不复制完整 CodexPlusPlus 插件快照，不实现通用配置编辑器，不迁移或清理用户旧数据库。"
+  ]
+}
